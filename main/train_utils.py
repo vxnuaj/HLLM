@@ -191,6 +191,7 @@ class Trainer:
                 if self.val_steps and global_steps % self.val_steps == 0:
                     self.model.eval() 
                     if global_steps % self.checkpoint_steps != 0:
+                        dist.barrier()
                         self._clr_mem(gc_ = True, cuda_clr_cache = True, X = X, y = y, logits = logits)
                     
                     val_dataloader = self._get_val_dataloader(self.X_val_path, self.y_val_path)
