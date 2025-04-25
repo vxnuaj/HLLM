@@ -12,6 +12,8 @@ import time
 import sys
 import torch.nn.functional as F
 import torch.distributed as dist
+import logging
+
 from tqdm import tqdm
 
 from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
@@ -77,29 +79,41 @@ def prof_single_forward_pt(model, data_shape, use_mixed_precision=False):
             model(input_data)
     return prof.export_chrome_trace("prof_single_forward_pt.json")
 
-def time_avg_forward(model, data_shape, n_inf_passes, use_mixed_precision=False):
-    input_data = torch.randint(0, 10000, size=data_shape, device=next(model.parameters()).device)
+def time_avg_forward(model, data_shape, vocab_size, n_inf_passes, use_mixed_precision=False):
+    device = next(model.parameters()).device
+    input_data = torch.randint(0, vocab_size, size=data_shape, device=device)
     times = []
+
     for _ in range(n_inf_passes):
-        start = time.time()
+        if device.type == 'cuda':
+            torch.cuda.synchronize()
+        start = time.perf_counter() 
         if use_mixed_precision:
             with autocast(device_type='cuda', dtype=torch.float16):
                 model(input_data)
         else:
             model(input_data)
-        elapsed = time.time() - start
-        if not math.isnan(elapsed): 
+        if device.type == 'cuda':
+            torch.cuda.synchronize()
+        elapsed = time.perf_counter() - start
+
+        if elapsed >= 0 and not np.isnan(elapsed) and not np.isinf(elapsed):
             times.append(elapsed)
+
     return float(np.mean(times))
 
 def time_avg_backward(model, data_shape, vocab_size, n_bck_passes, use_mixed_precision=False):
-    input_data = torch.randint(0, vocab_size, size=data_shape, device=next(model.parameters()).device)
+    device = next(model.parameters()).device
+    input_data = torch.randint(0, vocab_size, size=data_shape, device=device)
     target = torch.randint_like(input_data, 0, vocab_size)
     times = []
     scaler = GradScaler(enabled=use_mixed_precision)
+
     for _ in range(n_bck_passes):
         model.zero_grad()
-        start = time.time()
+        if device.type == 'cuda':
+            torch.cuda.synchronize()
+        start = time.perf_counter()  
         if use_mixed_precision:
             with autocast(device_type='cuda', dtype=torch.float16):
                 out = model(input_data)
@@ -109,19 +123,27 @@ def time_avg_backward(model, data_shape, vocab_size, n_bck_passes, use_mixed_pre
             out = model(input_data)
             loss = F.cross_entropy(out.view(-1, out.size(-1)), target.view(-1))
             loss.backward()
-        elapsed = time.time() - start
-        if not math.isnan(elapsed): 
-            times.append(elapsed)    
+        if device.type == 'cuda':
+            torch.cuda.synchronize()
+        elapsed = time.perf_counter() - start
+
+        if elapsed >= 0 and not np.isnan(elapsed) and not np.isinf(elapsed):
+            times.append(elapsed)
     return float(np.mean(times))
 
+
 def time_avg_fwd_backward(model, data_shape, vocab_size, n_iter, use_mixed_precision=False):
-    input_data = torch.randint(0, vocab_size, size=data_shape, device=next(model.parameters()).device)
+    device = next(model.parameters()).device
+    input_data = torch.randint(0, vocab_size, size=data_shape, device=device)
     target = torch.randint_like(input_data, 0, vocab_size)
     times = []
     scaler = GradScaler(enabled=use_mixed_precision)
+
     for _ in range(n_iter):
         model.zero_grad()
-        start = time.time()
+        if device.type == 'cuda':
+            torch.cuda.synchronize()
+        start = time.perf_counter()
         if use_mixed_precision:
             with autocast(device_type='cuda', dtype=torch.float16):
                 out = model(input_data)
@@ -131,10 +153,14 @@ def time_avg_fwd_backward(model, data_shape, vocab_size, n_iter, use_mixed_preci
             out = model(input_data)
             loss = F.cross_entropy(out.view(-1, out.size(-1)), target.view(-1))
             loss.backward()
-        elapsed = time.time() - start
-        if not math.isnan(elapsed): 
-            times.append(elapsed) 
-    return float(np.mean(times))
+        if device.type == 'cuda':
+            torch.cuda.synchronize()
+        elapsed = time.perf_counter() - start
+
+        if elapsed >= 0 and not np.isnan(elapsed) and not np.isinf(elapsed):
+            times.append(elapsed)
+
+    return float(np.mean(times)) if times else 0.0
 
 def wrap_model(model, parallel_type, fsdp_wrap_policy="auto"):
     if parallel_type == "none":
@@ -181,45 +207,50 @@ def run_profs(
     for cfg in configs:
         parallel_type = cfg.get("parallel", "none")
         grouped_configs[parallel_type].append(cfg)
-    
+   
     for parallel_type, config_group in grouped_configs.items():
         if torch.cuda.is_available() and dist.is_available():
             dist.init_process_group(backend='nccl')
 
         for i, cfg in enumerate(tqdm(config_group, desc=f"Running {parallel_type.upper()} configs")):
-            model = LLaMA(**cfg).to(device)
-            model.train()
+            try:
+                model = LLaMA(**cfg).to(device)
+                model.train()
 
-            use_mixed_precision = cfg.get("mixed_precision", False)
-            use_compile = cfg.get("compile", False)
+                use_mixed_precision = cfg.get("mixed_precision", False)
+                use_compile = cfg.get("compile", False)
 
-            if use_compile:
-                model = torch.compile(model)
+                if use_compile:
+                    model = torch.compile(model)
 
-            model = wrap_model(model, parallel_type, fsdp_wrap_policy=cfg.get("fsdp_wrap_policy", "auto"))
+                model = wrap_model(model, parallel_type, fsdp_wrap_policy=cfg.get("fsdp_wrap_policy", "auto"))
 
-            out_dir = os.path.join(results_root, f"{parallel_type}_config_{i}")
-            os.makedirs(out_dir, exist_ok=True)
+                out_dir = os.path.join(results_root, f"{parallel_type}_config_{i}")
+                os.makedirs(out_dir, exist_ok=True)
 
-            if profile_forward:
-                prof_single_forward_pt(model, data_shape, use_mixed_precision)
-                shutil.move("prof_single_forward_pt.json", os.path.join(out_dir, "prof_pt.json"))
+                if profile_forward:
+                    prof_single_forward_pt(model, data_shape, use_mixed_precision)
+                    shutil.move("prof_single_forward_pt.json", os.path.join(out_dir, "prof_pt.json"))
 
-            avg_fwd = time_avg_forward(model, data_shape, n_inf_passes, use_mixed_precision)
-            avg_bck = time_avg_backward(model, data_shape, n_bck_passes, use_mixed_precision)
-            avg_fwdbck = time_avg_fwd_backward(model, data_shape, vocab_size, n_fwd_bck_iter, use_mixed_precision)
+                avg_fwd = time_avg_forward(model, data_shape, n_inf_passes, use_mixed_precision)
+                avg_bck = time_avg_backward(model, data_shape, n_bck_passes, use_mixed_precision)
+                avg_fwdbck = time_avg_fwd_backward(model, data_shape, vocab_size, n_fwd_bck_iter, use_mixed_precision)
 
-            cfg['flash_attn_dtype'] = str(cfg['flash_attn_dtype'])
+                cfg['flash_attn_dtype'] = str(cfg['flash_attn_dtype'])
 
-            metrics = {
-                "config": cfg,
-                "avg_forward_time": avg_fwd,
-                "avg_backward_time": avg_bck,
-                "avg_fwd_bwd_time": avg_fwdbck
-            }
-            
-            with open(os.path.join(out_dir, "metrics.json"), "w") as f:
-                json.dump(metrics, f, indent=2)
+                metrics = {
+                    "config": cfg,
+                    "avg_forward_time": avg_fwd,
+                    "avg_backward_time": avg_bck,
+                    "avg_fwd_bwd_time": avg_fwdbck
+                }
+                
+                with open(os.path.join(out_dir, "metrics.json"), "w") as f:
+                    json.dump(metrics, f, indent=2)
+
+            except:
+                logging.error(f"Error at iteration {i}: {e}")
+                continue
 
         if dist.is_initialized():
             dist.destroy_process_group()
