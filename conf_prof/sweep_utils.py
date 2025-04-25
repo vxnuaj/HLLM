@@ -11,6 +11,7 @@ import time
 import sys
 import torch.nn.functional as F
 import torch.distributed as dist
+from tqdm import tqdm
 
 from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 from torch.amp import autocast, GradScaler
@@ -148,14 +149,13 @@ def wrap_model(model, parallel_type, fsdp_wrap_policy="auto"):
 def run_profs(
     cfg_path: str,
     data_shape: tuple,
-    vocab_size:int = 10000,
+    vocab_size: int = 10000,
     n_inf_passes: int = 50,
     n_bck_passes: int = 50,
     n_fwd_bck_iter: int = 50,
     results_root: str = "conf_prof/results",
     profile_forward: bool = False
     ):
-    
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     if device == 'cpu':
         warnings.warn('Currently on CPU.')
@@ -175,7 +175,7 @@ def run_profs(
         if torch.cuda.is_available() and dist.is_available():
             dist.init_process_group(backend='nccl')
 
-        for i, cfg in enumerate(config_group):
+        for i, cfg in enumerate(tqdm(config_group, desc=f"Running {parallel_type.upper()} configs")):
             model = LLaMA(**cfg).to(device)
             model.train()
 
