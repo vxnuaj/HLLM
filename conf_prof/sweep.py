@@ -7,5 +7,5 @@ run_profs(
     vocab_size = 10000,
     n_inf_passes=50,
     n_bck_passes=50,
-    n_fwd_bck_iter=50
+    n_fwd_bck_iter=50,
 )

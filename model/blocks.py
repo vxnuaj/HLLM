@@ -304,6 +304,11 @@ class MultiHeadSelfAttention(nn.Module):
         b, q_l, d_model = q.shape
         _, k_l, _ = k.shape 
         _, v_l, _ = v.shape 
+ 
+        if _inference:
+            seq_len = q_l
+        else:
+            seq_len = self.context_len
         
         assert d_model == self.d_model, f"Expected d_model to be {self.d_model}, got {d_model}" 
         
@@ -327,7 +332,7 @@ class MultiHeadSelfAttention(nn.Module):
             value = v,
             is_causal = True,
             enable_gqa = False
-        ).view(b, -1, d_model).to(torch.float32)
+        ).contiguous().view(b, seq_len, d_model).to(torch.float32)
 
         '''
         if self.flash_attn:
@@ -423,10 +428,10 @@ class MultiQueryAttention(nn.Module):
         Returns:
             torch.Tensor: Attention output of shape (batch_size, sequence_length, d_model).
         """
-        b, l, d_model = q.shape
+        b, seq_len, d_model = q.shape
         assert d_model == self.d_model, f"Expected d_model to be {self.d_model}, got {d_model}" 
         
-        q = q.view(b, self.n_heads, l, self.d_head)
+        q = q.view(b, self.n_heads, seq_len, self.d_head)
         k = k.unsqueeze(1)
         v = v.unsqueeze(1) 
        
@@ -449,7 +454,7 @@ class MultiQueryAttention(nn.Module):
             value = v,
             is_causal = True,
             enable_gqa = True
-        ).view(b, l, d_model).to(torch.float32)
+        ).contiguous().view(b, seq_len, d_model).to(torch.float32)
        
         '''
         if self.flash_attn: 
@@ -533,6 +538,11 @@ class MultiValueAttention(nn.Module):
         
         assert d_model == self.d_model, f"Expected d_model to be {self.d_model}, got {d_model}"
 
+        if _inference:
+            seq_len = q_l
+        else:
+            seq_len = self.context_len
+
         q = q.view(b, self.n_heads, q_l, self.d_head)
         k = k.unsqueeze(1)
         v = v.view(b, self.n_heads, v_l, self.d_head)
@@ -546,7 +556,7 @@ class MultiValueAttention(nn.Module):
         attn_logits = torch.matmul(q, k.transpose(-2, -1)) / (self.d_head ** 0.5)
         attn_logits = attn_logits.masked_fill(self.causal_mask[:, :, :q_l, :v_l] == 0, float("-inf"))
         attn_scores = F.softmax(attn_logits, dim=-1)
-        attn_output = torch.matmul(attn_scores, v).view(b, -1, d_model)
+        attn_output = torch.matmul(attn_scores, v).view(b, seq_len, d_model)
 
         return attn_output
         
@@ -645,7 +655,7 @@ class GroupedQueryAttention(nn.Module):
             value = v,
             is_causal = True,
             enable_gqa = True
-        ).view(b, l, d_model).to(torch.float32)
+        ).contiguous().view(b, l, d_model).to(torch.float32)
  
         '''
         if self.flash_attn:

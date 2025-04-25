@@ -1,4 +1,5 @@
 import os
+import math
 import json
 import shutil
 import itertools
@@ -86,7 +87,9 @@ def time_avg_forward(model, data_shape, n_inf_passes, use_mixed_precision=False)
                 model(input_data)
         else:
             model(input_data)
-        times.append(time.time() - start)
+        elapsed = time.time() - start
+        if not math.isnan(elapsed): 
+            times.append(elapsed)
     return float(np.mean(times))
 
 def time_avg_backward(model, data_shape, vocab_size, n_bck_passes, use_mixed_precision=False):
@@ -106,7 +109,9 @@ def time_avg_backward(model, data_shape, vocab_size, n_bck_passes, use_mixed_pre
             out = model(input_data)
             loss = F.cross_entropy(out.view(-1, out.size(-1)), target.view(-1))
             loss.backward()
-        times.append(time.time() - start)
+        elapsed = time.time() - start
+        if not math.isnan(elapsed): 
+            times.append(elapsed)    
     return float(np.mean(times))
 
 def time_avg_fwd_backward(model, data_shape, vocab_size, n_iter, use_mixed_precision=False):
@@ -122,12 +127,13 @@ def time_avg_fwd_backward(model, data_shape, vocab_size, n_iter, use_mixed_preci
                 out = model(input_data)
                 loss = F.cross_entropy(out.view(-1, out.size(-1)), target.view(-1))
             scaler.scale(loss).backward()
-            scaler.update()
         else:
             out = model(input_data)
             loss = F.cross_entropy(out.view(-1, out.size(-1)), target.view(-1))
             loss.backward()
-        times.append(time.time() - start)
+        elapsed = time.time() - start
+        if not math.isnan(elapsed): 
+            times.append(elapsed) 
     return float(np.mean(times))
 
 def wrap_model(model, parallel_type, fsdp_wrap_policy="auto"):
@@ -156,6 +162,11 @@ def run_profs(
     results_root: str = "conf_prof/results",
     profile_forward: bool = False
     ):
+    
+    local_rank = int(os.environ['LOCAL_RANK']) 
+    torch.cuda.set_device(local_rank)
+    device = torch.device("cuda", local_rank)
+    
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     if device == 'cpu':
         warnings.warn('Currently on CPU.')
@@ -198,12 +209,15 @@ def run_profs(
             avg_bck = time_avg_backward(model, data_shape, n_bck_passes, use_mixed_precision)
             avg_fwdbck = time_avg_fwd_backward(model, data_shape, vocab_size, n_fwd_bck_iter, use_mixed_precision)
 
+            cfg['flash_attn_dtype'] = str(cfg['flash_attn_dtype'])
+
             metrics = {
                 "config": cfg,
                 "avg_forward_time": avg_fwd,
                 "avg_backward_time": avg_bck,
                 "avg_fwd_bwd_time": avg_fwdbck
             }
+            
             with open(os.path.join(out_dir, "metrics.json"), "w") as f:
                 json.dump(metrics, f, indent=2)
 

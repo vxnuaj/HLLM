@@ -11,7 +11,7 @@ import torch
 import torch.nn as nn
 import warnings
 
-from blocks import PositionalEmbedding, TransformerBlock
+from model.blocks import PositionalEmbedding, TransformerBlock
 
 class LLaMA(nn.Module):
     """
@@ -143,6 +143,8 @@ class LLaMA(nn.Module):
         self.rmsnorm = nn.RMSNorm(normalized_shape=self.d_model)
         self.linear = nn.Linear(self.d_model, self.vocab_size)
         self.linear.weight = self.embeddings.weight
+ 
+        self._init_weights()
   
     def forward(self, x, _inference: bool = False):
         """
@@ -167,6 +169,17 @@ class LLaMA(nn.Module):
         x = self.linear(x) 
          
         return x
+    
+    def _init_weights(self):
+        #print(f"Initializing weights using Xavier Uniform Init.")
+        for module in self.modules():
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_normal_(module.weight)
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
+            elif isinstance(module, nn.Embedding):
+                nn.init.normal_(module.weight, mean=0.0, std=0.02)
+
     
     def _check_pos_emb_type(self, pos_emb_type: str):
         """
