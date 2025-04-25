@@ -154,7 +154,8 @@ def run_profs(
     n_fwd_bck_iter: int = 50,
     results_root: str = "conf_prof/results",
     profile_forward: bool = False
-):
+    ):
+    
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     if device == 'cpu':
         warnings.warn('Currently on CPU.')
@@ -162,45 +163,51 @@ def run_profs(
         if cont == 'n':
             sys.exit(0)
 
-    if torch.cuda.is_available() and dist.is_available():
-        dist.init_process_group(backend='nccl')
-
     raw = load_config(cfg_path)
     configs = generate_config_combinations(raw)
 
-    for i, cfg in enumerate(configs):
-        model = LLaMA(**cfg).to(device)
-        model.train()
+    grouped_configs = {"ddp": [], "fsdp": []}
+    for cfg in configs:
+        parallel_type = cfg.get("parallel", "none")
+        grouped_configs[parallel_type].append(cfg)
+    
+    for parallel_type, config_group in grouped_configs.items():
+        if torch.cuda.is_available() and dist.is_available():
+            dist.init_process_group(backend='nccl')
 
-        use_mixed_precision = cfg.get("mixed_precision", False)
-        use_compile = cfg.get("compile", False)
+        for i, cfg in enumerate(config_group):
+            model = LLaMA(**cfg).to(device)
+            model.train()
 
-        if use_compile:
-            model = torch.compile(model)
+            use_mixed_precision = cfg.get("mixed_precision", False)
+            use_compile = cfg.get("compile", False)
 
-        model = wrap_model(model, cfg.get("parallel", "none"), fsdp_wrap_policy=cfg.get("fsdp_wrap_policy", "auto"))
+            if use_compile:
+                model = torch.compile(model)
 
-        out_dir = os.path.join(results_root, f"config_{i}")
-        os.makedirs(out_dir, exist_ok=True)
+            model = wrap_model(model, parallel_type, fsdp_wrap_policy=cfg.get("fsdp_wrap_policy", "auto"))
 
-        if profile_forward:
-            prof_single_forward_pt(model, data_shape, use_mixed_precision)
-            shutil.move("prof_single_forward_pt.json", os.path.join(out_dir, "prof_pt.json"))
+            out_dir = os.path.join(results_root, f"{parallel_type}_config_{i}")
+            os.makedirs(out_dir, exist_ok=True)
 
-        avg_fwd = time_avg_forward(model, data_shape, n_inf_passes, use_mixed_precision)
-        avg_bck = time_avg_backward(model, data_shape, n_bck_passes, use_mixed_precision)
-        avg_fwdbck = time_avg_fwd_backward(model, data_shape, vocab_size, n_fwd_bck_iter, use_mixed_precision)
+            if profile_forward:
+                prof_single_forward_pt(model, data_shape, use_mixed_precision)
+                shutil.move("prof_single_forward_pt.json", os.path.join(out_dir, "prof_pt.json"))
 
-        metrics = {
-            "config": cfg,
-            "avg_forward_time": avg_fwd,
-            "avg_backward_time": avg_bck,
-            "avg_fwd_bwd_time": avg_fwdbck
-        }
-        with open(os.path.join(out_dir, "metrics.json"), "w") as f:
-            json.dump(metrics, f, indent=2)
+            avg_fwd = time_avg_forward(model, data_shape, n_inf_passes, use_mixed_precision)
+            avg_bck = time_avg_backward(model, data_shape, n_bck_passes, use_mixed_precision)
+            avg_fwdbck = time_avg_fwd_backward(model, data_shape, vocab_size, n_fwd_bck_iter, use_mixed_precision)
 
-    if dist.is_initialized():
-        dist.destroy_process_group()
+            metrics = {
+                "config": cfg,
+                "avg_forward_time": avg_fwd,
+                "avg_backward_time": avg_bck,
+                "avg_fwd_bwd_time": avg_fwdbck
+            }
+            with open(os.path.join(out_dir, "metrics.json"), "w") as f:
+                json.dump(metrics, f, indent=2)
+
+        if dist.is_initialized():
+            dist.destroy_process_group()
 
     print(f"Done! Results in '{results_root}'")
