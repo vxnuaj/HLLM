@@ -248,7 +248,7 @@ def run_profs(
                 with open(os.path.join(out_dir, "metrics.json"), "w") as f:
                     json.dump(metrics, f, indent=2)
 
-            except:
+            except RuntimeError as e:
                 logging.error(f"Error at iteration {i}: {e}")
                 continue
 
