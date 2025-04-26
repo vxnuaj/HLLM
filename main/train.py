@@ -6,7 +6,7 @@ import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'model')))
 
 from model import LLaMA
-from train_utils import Trainer, TrainerConfig, get_scheduler
+from train_utils import Trainer, Config, get_scheduler
 from dataloader import get_data, get_dataloader
 
 root_path = 'main/configs'
@@ -14,37 +14,37 @@ data_root_path = 'data/train'
 
 # GET CONFIGS FROM configs/{}.json
 
-loss_config = TrainerConfig.get_config(
+loss_config = Config.get_config(
     root_path = root_path,
     config_type = 'loss'
 )
 
-lr_config = TrainerConfig.get_config(
+lr_config = Config.get_config(
     root_path = root_path,
     config_type = 'lr'
 )
 
-opt_config = TrainerConfig.get_config(
+opt_config = Config.get_config(
     root_path = root_path,
     config_type = 'opt'
 )
 
-train_config = TrainerConfig.get_config(
+train_config = Config.get_config(
     root_path = root_path,
     config_type = 'train'
 )
 
-wandb_config = TrainerConfig.get_config(
+wandb_config = Config.get_config(
     root_path = root_path,
     config_type = 'run'
 )
 
-dataloader_config = TrainerConfig.get_config(
+dataloader_config = Config.get_config(
     root_path = root_path,
     config_type = 'dataloader'
 )
 
-model_config = TrainerConfig.get_config(
+model_config = Config.get_config(
     root_path = root_path,
     config_type = 'model'
 )
@@ -54,7 +54,7 @@ model_config = TrainerConfig.get_config(
 X, y = get_data(dataloader_config['data_root_path'])
 dataloader = get_dataloader(X, y, **dataloader_config)
 model = LLaMA(**model_config)
-trainer_config = TrainerConfig(**train_config)
+trainer_config = Config(**train_config)
 optimizer = opt.AdamW(**opt_config)
 scheduler = get_scheduler(optimizer, **lr_config)
 criterion = nn.CrossEntropy(**loss_config)

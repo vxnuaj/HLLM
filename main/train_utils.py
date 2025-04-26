@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from tqdm import tqdm
 
 @dataclass 
-class TrainerConfig:
+class Config:
     epochs:int
     checkpoint_steps:int
     save_checkpoint_path:str
@@ -44,7 +44,7 @@ class TrainerConfig:
     extra_args: dict = field(default_factory = dict)
 
     def __init__(self, **kwargs):
-        fields = TrainerConfig.__dataclass_fields__
+        fields = Config.__dataclass_fields__
         for key in fields:
             setattr(self, key, kwargs.pop(key, None))
         self.extra_args = kwargs
@@ -82,7 +82,7 @@ class Trainer:
         dataloader,
         optimizer,
         scheduler,
-        config: TrainerConfig
+        config: Config
         ):
        
         self.criterion = criterion

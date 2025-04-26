@@ -1,3 +1,7 @@
+'''
+Script to sweep across all possible configs for the model under `search_space.yaml`
+'''
+
 import os
 import math
 import json
@@ -42,7 +46,6 @@ def load_config(path: str):
             config["flash_attn_dtype"] = [dtype_map[d] for d in config["flash_attn_dtype"]]
         else:
             config["flash_attn_dtype"] = [dtype_map[config["flash_attn_dtype"]]]
-    
     return config
 
 def generate_config_combinations(config):

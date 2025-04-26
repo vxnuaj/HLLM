@@ -1,4 +1,3 @@
-import torch
 from sweep_utils import run_profs
 
 run_profs(
