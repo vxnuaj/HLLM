@@ -12,6 +12,8 @@ from dataloader import get_data, get_dataloader
 root_path = 'main/configs'
 data_root_path = 'data/train'
 
+# GET CONFIGS FROM configs/{}.json
+
 loss_config = TrainerConfig.get_config(
     root_path = root_path,
     config_type = 'loss'
@@ -56,6 +58,8 @@ trainer_config = TrainerConfig(**train_config)
 optimizer = opt.AdamW(**opt_config)
 scheduler = get_scheduler(optimizer, **lr_config)
 criterion = nn.CrossEntropy(**loss_config)
+
+# TRAINER & BEGIN TRAINING
 
 trainer = Trainer(
     model = model,

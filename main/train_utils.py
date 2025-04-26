@@ -196,14 +196,14 @@ class Trainer:
                     
                     val_dataloader = self._get_val_dataloader(self.X_val_path, self.y_val_path)
                    
-                    progress_bar = tqdm(enumerate(val_dataloader), desc = "Evaluating", total = len(val_dataloader),
+                    val_progress_bar = tqdm(enumerate(val_dataloader), desc = "Evaluating", total = len(val_dataloader),
                                         disable = (dist.get_rank()!=0 and self.parallel_type in ['fsdp', 'ddp']))
                    
                     val_steps = 0 
                     loss_accum = 0
                     pplx_accum = 0 
                     
-                    for i, (X_val, y_val) in progress_bar:
+                    for i, (X_val, y_val) in val_progress_bar:
                         X_val, y_val = X_val.to(self.device), y_val.to(self.device)
                         if self.val_mixed_precision:
                             with autocast(device_type = 'cuda', dtype = torch.float16):
