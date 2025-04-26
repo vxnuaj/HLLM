@@ -69,8 +69,13 @@ def generate_config_combinations(config):
     
     return valid_combos
 
-def prof_single_forward_pt(model, data_shape, use_mixed_precision=False):
-    input_data = torch.randint(0, 10000, size=data_shape, device=next(model.parameters()).device)
+def prof_single_forward_pt(
+    model, 
+    data_shape, 
+    vocab_size, 
+    use_mixed_precision=False
+    ):
+    input_data = torch.randint(0, vocab_size, size=data_shape, device=next(model.parameters()).device)
     with torch.profiler.profile(
         activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],
         record_shapes=True
@@ -82,7 +87,14 @@ def prof_single_forward_pt(model, data_shape, use_mixed_precision=False):
             model(input_data)
     return prof.export_chrome_trace("prof_single_forward_pt.json")
 
-def time_avg_forward(model, data_shape, vocab_size, n_inf_passes, use_mixed_precision=False):
+def time_avg_forward(
+    model, 
+    data_shape, 
+    vocab_size, 
+    n_inf_passes, 
+    use_mixed_precision=False
+    ):
+    
     device = next(model.parameters()).device
     input_data = torch.randint(0, vocab_size, size=data_shape, device=device)
     times = []
@@ -96,16 +108,21 @@ def time_avg_forward(model, data_shape, vocab_size, n_inf_passes, use_mixed_prec
                 model(input_data)
         else:
             model(input_data)
-        if device.type == 'cuda':
-            torch.cuda.synchronize()
         elapsed = time.perf_counter() - start
 
         if elapsed >= 0 and not np.isnan(elapsed) and not np.isinf(elapsed):
             times.append(elapsed)
 
-    return float(np.mean(times))
+    return float(np.mean(times)) if times else 0.0
 
-def time_avg_backward(model, data_shape, vocab_size, n_bck_passes, use_mixed_precision=False):
+def time_avg_backward(
+    model, 
+    data_shape, 
+    vocab_size, 
+    n_bck_passes, 
+    use_mixed_precision=False
+    ):
+    
     device = next(model.parameters()).device
     input_data = torch.randint(0, vocab_size, size=data_shape, device=device)
     target = torch.randint_like(input_data, 0, vocab_size)
@@ -126,16 +143,20 @@ def time_avg_backward(model, data_shape, vocab_size, n_bck_passes, use_mixed_pre
             out = model(input_data)
             loss = F.cross_entropy(out.view(-1, out.size(-1)), target.view(-1))
             loss.backward()
-        if device.type == 'cuda':
-            torch.cuda.synchronize()
         elapsed = time.perf_counter() - start
-
         if elapsed >= 0 and not np.isnan(elapsed) and not np.isinf(elapsed):
             times.append(elapsed)
-    return float(np.mean(times))
+    return float(np.mean(times)) if times else 0.0
 
 
-def time_avg_fwd_backward(model, data_shape, vocab_size, n_iter, use_mixed_precision=False):
+def time_avg_fwd_backward(
+    model, 
+    data_shape, 
+    vocab_size, 
+    n_iter, 
+    use_mixed_precision=False
+    ):
+    
     device = next(model.parameters()).device
     input_data = torch.randint(0, vocab_size, size=data_shape, device=device)
     target = torch.randint_like(input_data, 0, vocab_size)
@@ -156,10 +177,7 @@ def time_avg_fwd_backward(model, data_shape, vocab_size, n_iter, use_mixed_preci
             out = model(input_data)
             loss = F.cross_entropy(out.view(-1, out.size(-1)), target.view(-1))
             loss.backward()
-        if device.type == 'cuda':
-            torch.cuda.synchronize()
         elapsed = time.perf_counter() - start
-
         if elapsed >= 0 and not np.isnan(elapsed) and not np.isinf(elapsed):
             times.append(elapsed)
 
@@ -232,11 +250,11 @@ def run_profs(
                 os.makedirs(out_dir, exist_ok=True)
 
                 if profile_forward:
-                    prof_single_forward_pt(model, data_shape, use_mixed_precision)
+                    prof_single_forward_pt(model, data_shape, vocab_size, use_mixed_precision)
                     shutil.move("prof_single_forward_pt.json", os.path.join(out_dir, "prof_pt.json"))
 
-                avg_fwd = time_avg_forward(model, data_shape, n_inf_passes, use_mixed_precision)
-                avg_bck = time_avg_backward(model, data_shape, n_bck_passes, use_mixed_precision)
+                avg_fwd = time_avg_forward(model, data_shape, vocab_size, n_inf_passes, use_mixed_precision)
+                avg_bck = time_avg_backward(model, data_shape, vocab_size, n_bck_passes, use_mixed_precision)
                 avg_fwdbck = time_avg_fwd_backward(model, data_shape, vocab_size, n_fwd_bck_iter, use_mixed_precision)
 
                 cfg['flash_attn_dtype'] = str(cfg['flash_attn_dtype'])

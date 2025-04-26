@@ -1,12 +1,3 @@
-'''
-
-TODO:
-
-- [ ] init xaiver normal
-
-'''
-
-
 import torch
 import torch.nn as nn
 import warnings
@@ -171,7 +162,7 @@ class LLaMA(nn.Module):
         return x
     
     def _init_weights(self):
-        #print(f"Initializing weights using Xavier Uniform Init.")
+        print(f"Initializing weights using Xavier Uniform Init.")
         for module in self.modules():
             if isinstance(module, nn.Linear):
                 nn.init.xavier_normal_(module.weight)
@@ -205,6 +196,9 @@ class LLaMA(nn.Module):
         Args:
             supress_warnings (bool): If True, suppresses all warnings; if False, enables default warning behavior.
         """
+        
+        assert isinstance(supress_warnings, bool), ValueError("supress_warnings must be type bool")
+        
         if supress_warnings:
             warnings.filterwarnings("ignore")
         else:
