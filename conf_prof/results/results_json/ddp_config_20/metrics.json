@@ -22,7 +22,7 @@
     "parallel": "ddp",
     "fsdp_wrap_policy": "auto"
   },
-  "avg_forward_time": 0.0,
-  "avg_backward_time": 0.021716953665018083,
-  "avg_fwd_bwd_time": 0.020869777239859104
+  "avg_forward_time": 0.06626800449565053,
+  "avg_backward_time": 0.022350230626761912,
+  "avg_fwd_bwd_time": 0.017239521238952876
 }

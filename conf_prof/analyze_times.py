@@ -101,7 +101,7 @@ def write_results(best_configs, root_dir='conf_prof/results', file_name='time_re
 
 if __name__ == "__main__":
     root_dir = "conf_prof/results/results_json"
-    top_n = 10
+    top_n = 1
 
     results = get_results(root_dir)
     print(len(results)) 
