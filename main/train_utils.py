@@ -24,6 +24,9 @@ from tqdm import tqdm
 
 @dataclass 
 class Config:
+    vocab_size:int
+    batch_size:int
+    context_length:int
     epochs:int
     checkpoint_steps:int
     save_checkpoint_path:str
@@ -41,6 +44,8 @@ class Config:
     y_val_path:str
     wandb_:bool
     run_config:dict
+    _compile:bool
+    _compile_warmup:int
     extra_args: dict = field(default_factory = dict)
 
     def __init__(self, **kwargs):
@@ -90,7 +95,10 @@ class Trainer:
         self.scheduler = scheduler
         self.dataloader = dataloader
         self.config = config
-        
+     
+        self.vocab_size = config.vocab_size 
+        self.batch_size = config.batch_size 
+        self.context_length = config.context_length 
         self.epochs = config.epochs
         self.checkpoint_steps = config.checkpoint_steps
         self.save_checkpoint_path = config.save_checkpoint_path
@@ -108,6 +116,8 @@ class Trainer:
         self.y_val_path = config.y_val_path
         self.wandb_ = config.wandb_ # bool, if True, then wandb tracking is enabled
         self.run_config = config.run_config
+        self._compile = config._compile
+        self._compile_warmup_steps = config._compile_wamrup_steps
        
         self.scaler = GradScaler() if self.mixed_precision else None
         self._check_dataloader_sampler()
@@ -116,7 +126,8 @@ class Trainer:
         self.model = self._get_model(model)
         
     def train(self):
-       
+    
+        self._compile_wamrup() 
         self._init_wandb() 
         self._check_device_warn()
         global_steps = 0 
@@ -350,11 +361,6 @@ class Trainer:
         X_val = torch.load(X_val_path)
         y_val = torch.load(y_val_path)
         
-        '''
-        X_val = torch.load('data/val/X_val.pt')
-        y_val = torch.load('data/val/y_val.pt') 
-        '''
-        
         val_dataloader = get_dataloader(
             X = X_val,
             y = y_val,
@@ -374,6 +380,16 @@ class Trainer:
             wandb.init(
                 **self.run_config
             ) 
+
+    def _compile_wamrup(self):
+        if self._compile:
+            print('Running compile wamrup')
+            x = torch.randint(low = 0, high = self.vocab_size, size = (self.batch_size, self.context_length))
+            for _ in tqdm(range(self._compile_warmup_steps), desc = 'Compile warmup.', total = self._compile_warmup_steps):
+                self.model(x)
+            self._clr_mem(gc_= True, cuda_clr_cache=True, x = x) 
+            print(f'Finished running compile wamrup, beginning training...') 
+  
 
 def get_scheduler(optimizer, warmup_steps, constant_steps, decay_steps, max_lr, min_lr):
     def lr_lambda(step):

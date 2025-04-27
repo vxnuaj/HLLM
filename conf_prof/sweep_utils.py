@@ -199,6 +199,12 @@ def wrap_model(model, parallel_type, fsdp_wrap_policy="auto"):
     else:
         raise ValueError(f"Unknown parallel type: {parallel_type}")
 
+def warmup_compile(model, compile_wamrup_steps, vocab_size, data_shape):
+    device = next(model.parameters()).device
+    input_data = torch.randint(0, vocab_size, size = data_shape, device = device)
+    for _ in range(compile_wamrup_steps):
+        model(input_data)
+
 def run_profs(
     cfg_path: str,
     data_shape: tuple,
@@ -207,9 +213,10 @@ def run_profs(
     n_bck_passes: int = 50,
     n_fwd_bck_iter: int = 50,
     results_root: str = "conf_prof/results",
-    profile_forward: bool = False
+    profile_forward: bool = False,
+    compile_warmup_steps:int = 5,
     ):
-    
+   
     local_rank = int(os.environ['LOCAL_RANK']) 
     torch.cuda.set_device(local_rank)
     device = torch.device("cuda", local_rank)
@@ -243,6 +250,13 @@ def run_profs(
 
                 if use_compile:
                     model = torch.compile(model)
+
+                    warmup_compile(
+                        model = model, 
+                        compile_wamrup_steps = compile_warmup_steps, 
+                        vocab_size = vocab_size, 
+                        data_shape = data_shape
+                        )
 
                 model = wrap_model(model, parallel_type, fsdp_wrap_policy=cfg.get("fsdp_wrap_policy", "auto"))
 

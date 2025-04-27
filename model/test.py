@@ -43,12 +43,21 @@ model = LLaMA(
     supress_warnings = supress_warnings
     )
 
-model = torch.compile(model)
-
-# Forward Pass
-
 x = torch.randint(low = 0, high = vocab_size, size = (batch_size, seq_len))
 
+print('compiling')
+
+model = torch.compile(model)
+
+for _ in range(20):
+    start = time.time()
+    model(x)
+    end = time.time()
+    print(end - start)
+    
+# Forward Pass
+'''
+x = torch.randint(low = 0, high = vocab_size, size = (batch_size, seq_len))
 print(f'FORWARD ----------')
 start = time.time()
 print(model(x).shape, '\n')
@@ -60,3 +69,4 @@ x2 = torch.randint(low = 0, high = vocab_size, size = (batch_size, 1))
 
 print(f'INFERENCE ----------')
 start = time.time()
+'''

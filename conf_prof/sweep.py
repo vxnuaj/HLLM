@@ -7,4 +7,7 @@ run_profs(
     n_inf_passes=50,
     n_bck_passes=50,
     n_fwd_bck_iter=50,
+    results_root = 'conf_prof/results',
+    profile_forward = False,
+    compile_wamrup_steps = 7 
 )

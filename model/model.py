@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import warnings
 
-from model.blocks import PositionalEmbedding, TransformerBlock
+from blocks import PositionalEmbedding, TransformerBlock
 
 class LLaMA(nn.Module):
     """

@@ -1,3 +1,4 @@
+import torch
 import torch.optim as opt
 import torch.nn as nn
 import os
@@ -53,7 +54,7 @@ model_config = Config.get_config(
 
 X, y = get_data(dataloader_config['data_root_path'])
 dataloader = get_dataloader(X, y, **dataloader_config)
-model = LLaMA(**model_config)
+model = torch.compile(LLaMA(**model_config))
 trainer_config = Config(**train_config)
 optimizer = opt.AdamW(**opt_config)
 scheduler = get_scheduler(optimizer, **lr_config)
