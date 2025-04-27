@@ -1,397 +1,5 @@
 These are the best top-10 configuration(s) across attn_type, with respect to avg_fwd_bwd_time.
 
-# Top-10 configurations for mqa
-
-Avg. Forward Time: `0.0`
-
-Avg. Backward Time: `0.010526601448655129`
-
-Avg. Forward $\rightarrow$ Backward Time: `0.011017700247466565`
-
-```json
-{
-  "config": {
-    "context_len": 512,
-    "d_model": 512,
-    "n_heads": 8,
-    "n_blocks": 4,
-    "vocab_size": 10000,
-    "pos_emb_dropout_p": 0.1,
-    "learned": false,
-    "ntk_rope_scaling": false,
-    "dyn_scaling": false,
-    "attn_type": "mqa",
-    "n_groups": null,
-    "top_k_sparsev": null,
-    "p_threshold": null,
-    "p_threshold_steps_fraction": null,
-    "flash_attn": false,
-    "pos_emb_type": "rope",
-    "mixed_precision": false,
-    "flash_attn_dtype": "None",
-    "compile": true,
-    "parallel": "ddp",
-    "fsdp_wrap_policy": "auto"
-  },
-  "avg_forward_time": 0.0,
-  "avg_backward_time": 0.010526601448655129,
-  "avg_fwd_bwd_time": 0.011017700247466565
-}
-```
-
----
-
-Avg. Forward Time: `0.0`
-
-Avg. Backward Time: `0.011259399503469467`
-
-Avg. Forward $\rightarrow$ Backward Time: `0.01123091921210289`
-
-```json
-{
-  "config": {
-    "context_len": 512,
-    "d_model": 512,
-    "n_heads": 8,
-    "n_blocks": 4,
-    "vocab_size": 10000,
-    "pos_emb_dropout_p": 0.1,
-    "learned": false,
-    "ntk_rope_scaling": false,
-    "dyn_scaling": false,
-    "attn_type": "mqa",
-    "n_groups": null,
-    "top_k_sparsev": null,
-    "p_threshold": null,
-    "p_threshold_steps_fraction": null,
-    "flash_attn": false,
-    "pos_emb_type": "rope",
-    "mixed_precision": false,
-    "flash_attn_dtype": "None",
-    "compile": true,
-    "parallel": "ddp",
-    "fsdp_wrap_policy": "transformer"
-  },
-  "avg_forward_time": 0.0,
-  "avg_backward_time": 0.011259399503469467,
-  "avg_fwd_bwd_time": 0.01123091921210289
-}
-```
-
----
-
-Avg. Forward Time: `0.0`
-
-Avg. Backward Time: `0.0508243615925312`
-
-Avg. Forward $\rightarrow$ Backward Time: `0.011462128274142742`
-
-```json
-{
-  "config": {
-    "context_len": 512,
-    "d_model": 512,
-    "n_heads": 8,
-    "n_blocks": 4,
-    "vocab_size": 10000,
-    "pos_emb_dropout_p": 0.1,
-    "learned": false,
-    "ntk_rope_scaling": false,
-    "dyn_scaling": false,
-    "attn_type": "mqa",
-    "n_groups": null,
-    "top_k_sparsev": null,
-    "p_threshold": null,
-    "p_threshold_steps_fraction": null,
-    "flash_attn": false,
-    "pos_emb_type": "rope",
-    "mixed_precision": false,
-    "flash_attn_dtype": "None",
-    "compile": true,
-    "parallel": "ddp",
-    "fsdp_wrap_policy": "auto"
-  },
-  "avg_forward_time": 0.0,
-  "avg_backward_time": 0.0508243615925312,
-  "avg_fwd_bwd_time": 0.011462128274142742
-}
-```
-
----
-
-Avg. Forward Time: `0.0`
-
-Avg. Backward Time: `0.010980080924928188`
-
-Avg. Forward $\rightarrow$ Backward Time: `0.011467584185302257`
-
-```json
-{
-  "config": {
-    "context_len": 512,
-    "d_model": 512,
-    "n_heads": 8,
-    "n_blocks": 4,
-    "vocab_size": 10000,
-    "pos_emb_dropout_p": 0.1,
-    "learned": false,
-    "ntk_rope_scaling": false,
-    "dyn_scaling": false,
-    "attn_type": "mqa",
-    "n_groups": null,
-    "top_k_sparsev": null,
-    "p_threshold": null,
-    "p_threshold_steps_fraction": null,
-    "flash_attn": false,
-    "pos_emb_type": "rope",
-    "mixed_precision": false,
-    "flash_attn_dtype": "None",
-    "compile": true,
-    "parallel": "ddp",
-    "fsdp_wrap_policy": "transformer"
-  },
-  "avg_forward_time": 0.0,
-  "avg_backward_time": 0.010980080924928188,
-  "avg_fwd_bwd_time": 0.011467584185302257
-}
-```
-
----
-
-Avg. Forward Time: `0.0`
-
-Avg. Backward Time: `0.010781869515776634`
-
-Avg. Forward $\rightarrow$ Backward Time: `0.011623252332210541`
-
-```json
-{
-  "config": {
-    "context_len": 512,
-    "d_model": 512,
-    "n_heads": 8,
-    "n_blocks": 4,
-    "vocab_size": 10000,
-    "pos_emb_dropout_p": 0.1,
-    "learned": false,
-    "ntk_rope_scaling": false,
-    "dyn_scaling": false,
-    "attn_type": "mqa",
-    "n_groups": null,
-    "top_k_sparsev": null,
-    "p_threshold": null,
-    "p_threshold_steps_fraction": null,
-    "flash_attn": true,
-    "pos_emb_type": "rope",
-    "mixed_precision": false,
-    "flash_attn_dtype": "torch.float16",
-    "compile": true,
-    "parallel": "ddp",
-    "fsdp_wrap_policy": "auto"
-  },
-  "avg_forward_time": 0.0,
-  "avg_backward_time": 0.010781869515776634,
-  "avg_fwd_bwd_time": 0.011623252332210541
-}
-```
-
----
-
-Avg. Forward Time: `0.0`
-
-Avg. Backward Time: `0.01162097103893757`
-
-Avg. Forward $\rightarrow$ Backward Time: `0.011695174761116504`
-
-```json
-{
-  "config": {
-    "context_len": 512,
-    "d_model": 512,
-    "n_heads": 8,
-    "n_blocks": 4,
-    "vocab_size": 10000,
-    "pos_emb_dropout_p": 0.1,
-    "learned": false,
-    "ntk_rope_scaling": false,
-    "dyn_scaling": false,
-    "attn_type": "mqa",
-    "n_groups": null,
-    "top_k_sparsev": null,
-    "p_threshold": null,
-    "p_threshold_steps_fraction": null,
-    "flash_attn": true,
-    "pos_emb_type": "rope",
-    "mixed_precision": false,
-    "flash_attn_dtype": "torch.float16",
-    "compile": true,
-    "parallel": "ddp",
-    "fsdp_wrap_policy": "transformer"
-  },
-  "avg_forward_time": 0.0,
-  "avg_backward_time": 0.01162097103893757,
-  "avg_fwd_bwd_time": 0.011695174761116504
-}
-```
-
----
-
-Avg. Forward Time: `0.0`
-
-Avg. Backward Time: `0.011859335117042064`
-
-Avg. Forward $\rightarrow$ Backward Time: `0.011754957064986228`
-
-```json
-{
-  "config": {
-    "context_len": 512,
-    "d_model": 512,
-    "n_heads": 8,
-    "n_blocks": 4,
-    "vocab_size": 10000,
-    "pos_emb_dropout_p": 0.1,
-    "learned": false,
-    "ntk_rope_scaling": false,
-    "dyn_scaling": false,
-    "attn_type": "mqa",
-    "n_groups": null,
-    "top_k_sparsev": null,
-    "p_threshold": null,
-    "p_threshold_steps_fraction": null,
-    "flash_attn": true,
-    "pos_emb_type": "rope",
-    "mixed_precision": false,
-    "flash_attn_dtype": "torch.float16",
-    "compile": true,
-    "parallel": "ddp",
-    "fsdp_wrap_policy": "transformer"
-  },
-  "avg_forward_time": 0.0,
-  "avg_backward_time": 0.011859335117042064,
-  "avg_fwd_bwd_time": 0.011754957064986228
-}
-```
-
----
-
-Avg. Forward Time: `0.0`
-
-Avg. Backward Time: `0.047648667767643926`
-
-Avg. Forward $\rightarrow$ Backward Time: `0.011899131760001182`
-
-```json
-{
-  "config": {
-    "context_len": 512,
-    "d_model": 512,
-    "n_heads": 8,
-    "n_blocks": 4,
-    "vocab_size": 10000,
-    "pos_emb_dropout_p": 0.1,
-    "learned": false,
-    "ntk_rope_scaling": false,
-    "dyn_scaling": false,
-    "attn_type": "mqa",
-    "n_groups": null,
-    "top_k_sparsev": null,
-    "p_threshold": null,
-    "p_threshold_steps_fraction": null,
-    "flash_attn": true,
-    "pos_emb_type": "rope",
-    "mixed_precision": false,
-    "flash_attn_dtype": "torch.float16",
-    "compile": true,
-    "parallel": "ddp",
-    "fsdp_wrap_policy": "auto"
-  },
-  "avg_forward_time": 0.0,
-  "avg_backward_time": 0.047648667767643926,
-  "avg_fwd_bwd_time": 0.011899131760001182
-}
-```
-
----
-
-Avg. Forward Time: `0.0`
-
-Avg. Backward Time: `0.006119761355221271`
-
-Avg. Forward $\rightarrow$ Backward Time: `0.013493582680821419`
-
-```json
-{
-  "config": {
-    "context_len": 512,
-    "d_model": 512,
-    "n_heads": 8,
-    "n_blocks": 4,
-    "vocab_size": 10000,
-    "pos_emb_dropout_p": 0.1,
-    "learned": false,
-    "ntk_rope_scaling": false,
-    "dyn_scaling": false,
-    "attn_type": "mqa",
-    "n_groups": null,
-    "top_k_sparsev": null,
-    "p_threshold": null,
-    "p_threshold_steps_fraction": null,
-    "flash_attn": false,
-    "pos_emb_type": "rope",
-    "mixed_precision": true,
-    "flash_attn_dtype": "None",
-    "compile": true,
-    "parallel": "ddp",
-    "fsdp_wrap_policy": "transformer"
-  },
-  "avg_forward_time": 0.0,
-  "avg_backward_time": 0.006119761355221271,
-  "avg_fwd_bwd_time": 0.013493582680821419
-}
-```
-
----
-
-Avg. Forward Time: `0.0`
-
-Avg. Backward Time: `0.01747036002576351`
-
-Avg. Forward $\rightarrow$ Backward Time: `0.019723271206021308`
-
-```json
-{
-  "config": {
-    "context_len": 512,
-    "d_model": 512,
-    "n_heads": 8,
-    "n_blocks": 4,
-    "vocab_size": 10000,
-    "pos_emb_dropout_p": 0.1,
-    "learned": false,
-    "ntk_rope_scaling": false,
-    "dyn_scaling": false,
-    "attn_type": "mqa",
-    "n_groups": null,
-    "top_k_sparsev": null,
-    "p_threshold": null,
-    "p_threshold_steps_fraction": null,
-    "flash_attn": true,
-    "pos_emb_type": "rope",
-    "mixed_precision": true,
-    "flash_attn_dtype": "torch.float16",
-    "compile": true,
-    "parallel": "ddp",
-    "fsdp_wrap_policy": "auto"
-  },
-  "avg_forward_time": 0.0,
-  "avg_backward_time": 0.01747036002576351,
-  "avg_fwd_bwd_time": 0.019723271206021308
-}
-```
-
----
-
 # Top-10 configurations for mhsa
 
 Avg. Forward Time: `0.0`
@@ -1601,6 +1209,398 @@ Avg. Forward $\rightarrow$ Backward Time: `0.029270396456122397`
   "avg_forward_time": 0.0,
   "avg_backward_time": 0.02547381293028593,
   "avg_fwd_bwd_time": 0.029270396456122397
+}
+```
+
+---
+
+# Top-10 configurations for mqa
+
+Avg. Forward Time: `0.0`
+
+Avg. Backward Time: `0.010526601448655129`
+
+Avg. Forward $\rightarrow$ Backward Time: `0.011017700247466565`
+
+```json
+{
+  "config": {
+    "context_len": 512,
+    "d_model": 512,
+    "n_heads": 8,
+    "n_blocks": 4,
+    "vocab_size": 10000,
+    "pos_emb_dropout_p": 0.1,
+    "learned": false,
+    "ntk_rope_scaling": false,
+    "dyn_scaling": false,
+    "attn_type": "mqa",
+    "n_groups": null,
+    "top_k_sparsev": null,
+    "p_threshold": null,
+    "p_threshold_steps_fraction": null,
+    "flash_attn": false,
+    "pos_emb_type": "rope",
+    "mixed_precision": false,
+    "flash_attn_dtype": "None",
+    "compile": true,
+    "parallel": "ddp",
+    "fsdp_wrap_policy": "auto"
+  },
+  "avg_forward_time": 0.0,
+  "avg_backward_time": 0.010526601448655129,
+  "avg_fwd_bwd_time": 0.011017700247466565
+}
+```
+
+---
+
+Avg. Forward Time: `0.0`
+
+Avg. Backward Time: `0.011259399503469467`
+
+Avg. Forward $\rightarrow$ Backward Time: `0.01123091921210289`
+
+```json
+{
+  "config": {
+    "context_len": 512,
+    "d_model": 512,
+    "n_heads": 8,
+    "n_blocks": 4,
+    "vocab_size": 10000,
+    "pos_emb_dropout_p": 0.1,
+    "learned": false,
+    "ntk_rope_scaling": false,
+    "dyn_scaling": false,
+    "attn_type": "mqa",
+    "n_groups": null,
+    "top_k_sparsev": null,
+    "p_threshold": null,
+    "p_threshold_steps_fraction": null,
+    "flash_attn": false,
+    "pos_emb_type": "rope",
+    "mixed_precision": false,
+    "flash_attn_dtype": "None",
+    "compile": true,
+    "parallel": "ddp",
+    "fsdp_wrap_policy": "transformer"
+  },
+  "avg_forward_time": 0.0,
+  "avg_backward_time": 0.011259399503469467,
+  "avg_fwd_bwd_time": 0.01123091921210289
+}
+```
+
+---
+
+Avg. Forward Time: `0.0`
+
+Avg. Backward Time: `0.0508243615925312`
+
+Avg. Forward $\rightarrow$ Backward Time: `0.011462128274142742`
+
+```json
+{
+  "config": {
+    "context_len": 512,
+    "d_model": 512,
+    "n_heads": 8,
+    "n_blocks": 4,
+    "vocab_size": 10000,
+    "pos_emb_dropout_p": 0.1,
+    "learned": false,
+    "ntk_rope_scaling": false,
+    "dyn_scaling": false,
+    "attn_type": "mqa",
+    "n_groups": null,
+    "top_k_sparsev": null,
+    "p_threshold": null,
+    "p_threshold_steps_fraction": null,
+    "flash_attn": false,
+    "pos_emb_type": "rope",
+    "mixed_precision": false,
+    "flash_attn_dtype": "None",
+    "compile": true,
+    "parallel": "ddp",
+    "fsdp_wrap_policy": "auto"
+  },
+  "avg_forward_time": 0.0,
+  "avg_backward_time": 0.0508243615925312,
+  "avg_fwd_bwd_time": 0.011462128274142742
+}
+```
+
+---
+
+Avg. Forward Time: `0.0`
+
+Avg. Backward Time: `0.010980080924928188`
+
+Avg. Forward $\rightarrow$ Backward Time: `0.011467584185302257`
+
+```json
+{
+  "config": {
+    "context_len": 512,
+    "d_model": 512,
+    "n_heads": 8,
+    "n_blocks": 4,
+    "vocab_size": 10000,
+    "pos_emb_dropout_p": 0.1,
+    "learned": false,
+    "ntk_rope_scaling": false,
+    "dyn_scaling": false,
+    "attn_type": "mqa",
+    "n_groups": null,
+    "top_k_sparsev": null,
+    "p_threshold": null,
+    "p_threshold_steps_fraction": null,
+    "flash_attn": false,
+    "pos_emb_type": "rope",
+    "mixed_precision": false,
+    "flash_attn_dtype": "None",
+    "compile": true,
+    "parallel": "ddp",
+    "fsdp_wrap_policy": "transformer"
+  },
+  "avg_forward_time": 0.0,
+  "avg_backward_time": 0.010980080924928188,
+  "avg_fwd_bwd_time": 0.011467584185302257
+}
+```
+
+---
+
+Avg. Forward Time: `0.0`
+
+Avg. Backward Time: `0.010781869515776634`
+
+Avg. Forward $\rightarrow$ Backward Time: `0.011623252332210541`
+
+```json
+{
+  "config": {
+    "context_len": 512,
+    "d_model": 512,
+    "n_heads": 8,
+    "n_blocks": 4,
+    "vocab_size": 10000,
+    "pos_emb_dropout_p": 0.1,
+    "learned": false,
+    "ntk_rope_scaling": false,
+    "dyn_scaling": false,
+    "attn_type": "mqa",
+    "n_groups": null,
+    "top_k_sparsev": null,
+    "p_threshold": null,
+    "p_threshold_steps_fraction": null,
+    "flash_attn": true,
+    "pos_emb_type": "rope",
+    "mixed_precision": false,
+    "flash_attn_dtype": "torch.float16",
+    "compile": true,
+    "parallel": "ddp",
+    "fsdp_wrap_policy": "auto"
+  },
+  "avg_forward_time": 0.0,
+  "avg_backward_time": 0.010781869515776634,
+  "avg_fwd_bwd_time": 0.011623252332210541
+}
+```
+
+---
+
+Avg. Forward Time: `0.0`
+
+Avg. Backward Time: `0.01162097103893757`
+
+Avg. Forward $\rightarrow$ Backward Time: `0.011695174761116504`
+
+```json
+{
+  "config": {
+    "context_len": 512,
+    "d_model": 512,
+    "n_heads": 8,
+    "n_blocks": 4,
+    "vocab_size": 10000,
+    "pos_emb_dropout_p": 0.1,
+    "learned": false,
+    "ntk_rope_scaling": false,
+    "dyn_scaling": false,
+    "attn_type": "mqa",
+    "n_groups": null,
+    "top_k_sparsev": null,
+    "p_threshold": null,
+    "p_threshold_steps_fraction": null,
+    "flash_attn": true,
+    "pos_emb_type": "rope",
+    "mixed_precision": false,
+    "flash_attn_dtype": "torch.float16",
+    "compile": true,
+    "parallel": "ddp",
+    "fsdp_wrap_policy": "transformer"
+  },
+  "avg_forward_time": 0.0,
+  "avg_backward_time": 0.01162097103893757,
+  "avg_fwd_bwd_time": 0.011695174761116504
+}
+```
+
+---
+
+Avg. Forward Time: `0.0`
+
+Avg. Backward Time: `0.011859335117042064`
+
+Avg. Forward $\rightarrow$ Backward Time: `0.011754957064986228`
+
+```json
+{
+  "config": {
+    "context_len": 512,
+    "d_model": 512,
+    "n_heads": 8,
+    "n_blocks": 4,
+    "vocab_size": 10000,
+    "pos_emb_dropout_p": 0.1,
+    "learned": false,
+    "ntk_rope_scaling": false,
+    "dyn_scaling": false,
+    "attn_type": "mqa",
+    "n_groups": null,
+    "top_k_sparsev": null,
+    "p_threshold": null,
+    "p_threshold_steps_fraction": null,
+    "flash_attn": true,
+    "pos_emb_type": "rope",
+    "mixed_precision": false,
+    "flash_attn_dtype": "torch.float16",
+    "compile": true,
+    "parallel": "ddp",
+    "fsdp_wrap_policy": "transformer"
+  },
+  "avg_forward_time": 0.0,
+  "avg_backward_time": 0.011859335117042064,
+  "avg_fwd_bwd_time": 0.011754957064986228
+}
+```
+
+---
+
+Avg. Forward Time: `0.0`
+
+Avg. Backward Time: `0.047648667767643926`
+
+Avg. Forward $\rightarrow$ Backward Time: `0.011899131760001182`
+
+```json
+{
+  "config": {
+    "context_len": 512,
+    "d_model": 512,
+    "n_heads": 8,
+    "n_blocks": 4,
+    "vocab_size": 10000,
+    "pos_emb_dropout_p": 0.1,
+    "learned": false,
+    "ntk_rope_scaling": false,
+    "dyn_scaling": false,
+    "attn_type": "mqa",
+    "n_groups": null,
+    "top_k_sparsev": null,
+    "p_threshold": null,
+    "p_threshold_steps_fraction": null,
+    "flash_attn": true,
+    "pos_emb_type": "rope",
+    "mixed_precision": false,
+    "flash_attn_dtype": "torch.float16",
+    "compile": true,
+    "parallel": "ddp",
+    "fsdp_wrap_policy": "auto"
+  },
+  "avg_forward_time": 0.0,
+  "avg_backward_time": 0.047648667767643926,
+  "avg_fwd_bwd_time": 0.011899131760001182
+}
+```
+
+---
+
+Avg. Forward Time: `0.0`
+
+Avg. Backward Time: `0.006119761355221271`
+
+Avg. Forward $\rightarrow$ Backward Time: `0.013493582680821419`
+
+```json
+{
+  "config": {
+    "context_len": 512,
+    "d_model": 512,
+    "n_heads": 8,
+    "n_blocks": 4,
+    "vocab_size": 10000,
+    "pos_emb_dropout_p": 0.1,
+    "learned": false,
+    "ntk_rope_scaling": false,
+    "dyn_scaling": false,
+    "attn_type": "mqa",
+    "n_groups": null,
+    "top_k_sparsev": null,
+    "p_threshold": null,
+    "p_threshold_steps_fraction": null,
+    "flash_attn": false,
+    "pos_emb_type": "rope",
+    "mixed_precision": true,
+    "flash_attn_dtype": "None",
+    "compile": true,
+    "parallel": "ddp",
+    "fsdp_wrap_policy": "transformer"
+  },
+  "avg_forward_time": 0.0,
+  "avg_backward_time": 0.006119761355221271,
+  "avg_fwd_bwd_time": 0.013493582680821419
+}
+```
+
+---
+
+Avg. Forward Time: `0.0`
+
+Avg. Backward Time: `0.01747036002576351`
+
+Avg. Forward $\rightarrow$ Backward Time: `0.019723271206021308`
+
+```json
+{
+  "config": {
+    "context_len": 512,
+    "d_model": 512,
+    "n_heads": 8,
+    "n_blocks": 4,
+    "vocab_size": 10000,
+    "pos_emb_dropout_p": 0.1,
+    "learned": false,
+    "ntk_rope_scaling": false,
+    "dyn_scaling": false,
+    "attn_type": "mqa",
+    "n_groups": null,
+    "top_k_sparsev": null,
+    "p_threshold": null,
+    "p_threshold_steps_fraction": null,
+    "flash_attn": true,
+    "pos_emb_type": "rope",
+    "mixed_precision": true,
+    "flash_attn_dtype": "torch.float16",
+    "compile": true,
+    "parallel": "ddp",
+    "fsdp_wrap_policy": "auto"
+  },
+  "avg_forward_time": 0.0,
+  "avg_backward_time": 0.01747036002576351,
+  "avg_fwd_bwd_time": 0.019723271206021308
 }
 ```
 
