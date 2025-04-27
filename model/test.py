@@ -51,7 +51,6 @@ print('compiling')
 model = torch.compile(model)
     
 # Forward Pass
-'''
 x = torch.randint(low = 0, high = vocab_size, size = (batch_size, seq_len))
 print(f'FORWARD ----------')
 start = time.time()
@@ -64,4 +63,3 @@ x2 = torch.randint(low = 0, high = vocab_size, size = (batch_size, 1))
 
 print(f'INFERENCE ----------')
 start = time.time()
-'''

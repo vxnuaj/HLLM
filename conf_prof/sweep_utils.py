@@ -104,15 +104,14 @@ def time_avg_forward(
             torch.cuda.synchronize()
         if use_mixed_precision:
             with autocast(device_type='cuda', dtype=torch.float16):
-                start = time.time()
+                start = time.perf_counter()
                 model(input_data)
         else:
-            start = time.time()
+            start = time.perf_counter()
             model(input_data)
         elapsed = time.perf_counter() - start
         if elapsed >= 0 and not np.isnan(elapsed) and not np.isinf(elapsed):
             times.append(elapsed)
-
     return float(np.mean(times)) if times else 0.0
 
 def time_avg_backward(
@@ -215,7 +214,7 @@ def run_profs(
     n_inf_passes: int = 50,
     n_bck_passes: int = 50,
     n_fwd_bck_iter: int = 50,
-    results_root: str = "conf_prof/results",
+    results_root: str = "conf_prof/results/results_json",
     profile_forward: bool = False,
     compile_warmup_steps:int = 5,
     ):
