@@ -1,4 +1,4 @@
 #!/bin/bash
 
-pip install -r requirements.txt -q
+pip install -r requirements.txt
 torchrun --standalone --nnodes=1 --nproc-per-node=2 conf_prof/sweep.py
