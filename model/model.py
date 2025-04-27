@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import warnings
 
-from blocks import PositionalEmbedding, TransformerBlock
+from model.blocks import PositionalEmbedding, TransformerBlock
 
 class LLaMA(nn.Module):
     """
@@ -48,6 +48,7 @@ class LLaMA(nn.Module):
         flash_attn:bool = False,
         flash_attn_dtype:torch.dtype = torch.float16,
         supress_warnings: bool = True,
+        verbose:bool = False,
         *args,
         **kwargs
         ):
@@ -99,6 +100,7 @@ class LLaMA(nn.Module):
         self.p_threshold_steps_fraction = p_threshold_steps_fraction
         self.flash_attn = flash_attn
         self.flash_attn_dtype = flash_attn_dtype
+        self.verbose = verbose
 
         self.embeddings = nn.Embedding(
             num_embeddings=self.vocab_size,
@@ -162,7 +164,8 @@ class LLaMA(nn.Module):
         return x
     
     def _init_weights(self):
-        print(f"Initializing weights using Xavier Uniform Init.")
+        if self.verbose:
+            print(f"Initializing weights using Xavier Uniform Init.")
         for module in self.modules():
             if isinstance(module, nn.Linear):
                 nn.init.xavier_normal_(module.weight)

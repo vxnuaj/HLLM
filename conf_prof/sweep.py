@@ -9,5 +9,5 @@ run_profs(
     n_fwd_bck_iter=50,
     results_root = 'conf_prof/results',
     profile_forward = False,
-    compile_wamrup_steps = 7 
+    compile_warmup_steps = 7 
 )
