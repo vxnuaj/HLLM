@@ -102,14 +102,14 @@ def time_avg_forward(
     for _ in range(n_inf_passes):
         if device.type == 'cuda':
             torch.cuda.synchronize()
-        start = time.perf_counter() 
         if use_mixed_precision:
             with autocast(device_type='cuda', dtype=torch.float16):
+                start = time.time()
                 model(input_data)
         else:
+            start = time.time()
             model(input_data)
         elapsed = time.perf_counter() - start
-
         if elapsed >= 0 and not np.isnan(elapsed) and not np.isinf(elapsed):
             times.append(elapsed)
 
@@ -136,10 +136,12 @@ def time_avg_backward(
         start = time.perf_counter()  
         if use_mixed_precision:
             with autocast(device_type='cuda', dtype=torch.float16):
+                start = time.perf_counter()
                 out = model(input_data)
                 loss = F.cross_entropy(out.view(-1, out.size(-1)), target.view(-1))
             scaler.scale(loss).backward()
         else:
+            start = time.perf_counter()
             out = model(input_data)
             loss = F.cross_entropy(out.view(-1, out.size(-1)), target.view(-1))
             loss.backward()
@@ -167,13 +169,14 @@ def time_avg_fwd_backward(
         model.zero_grad()
         if device.type == 'cuda':
             torch.cuda.synchronize()
-        start = time.perf_counter()
         if use_mixed_precision:
             with autocast(device_type='cuda', dtype=torch.float16):
+                start = time.perf_counter()
                 out = model(input_data)
                 loss = F.cross_entropy(out.view(-1, out.size(-1)), target.view(-1))
             scaler.scale(loss).backward()
         else:
+            start = time.perf_counter()
             out = model(input_data)
             loss = F.cross_entropy(out.view(-1, out.size(-1)), target.view(-1))
             loss.backward()
