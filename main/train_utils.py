@@ -10,14 +10,24 @@ import os
 import gc
 import sys
 import wandb
+import functools
 
 from torch.distributed import ReduceOp
 from torch.utils.data import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 from torch.amp import autocast, GradScaler
 from torch.optim.lr_scheduler import LambdaLR
 from dataloader import get_dataloader
+
+import pprint
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+#pprint.pprint(sys.path)
+
+from blocks import TransformerBlock
 
 from dataclasses import dataclass, field
 from tqdm import tqdm
@@ -131,6 +141,9 @@ class Trainer:
         self._init_wandb() 
         self._check_device_warn()
         global_steps = 0 
+       
+        rank = dist.get_rank() 
+        is_main_rank = rank == 0 
         
         for epoch in range(self.epochs):
             progress_bar = tqdm(enumerate(self.dataloader), desc="Training", total=len(self.dataloader), 
@@ -139,28 +152,32 @@ class Trainer:
                 X, y = X.to(self.device), y.to(self.device)
                 if self.mixed_precision:
                     with autocast(device_type = 'cuda', dtype = torch.float16):
-                        if dist.get_rank() == 0:
-                            start_time = time.time()
+                        if is_main_rank:
+                            start_time = time.perf_counter()
                         logits = self.model(X)
                         loss = self.criterion(logits.view(-1, logits.size(-1)), y.view(-1))
                         pplx = torch.exp(loss)
                     loss_avg, pplx_avg = self._get_avg_rank_loss_pplx(loss, pplx) 
                     self.scaler.scale(loss).backward() 
-                    if dist.get_rank() == 0:
-                        end_time = time.time()
+                    if is_main_rank:
+                        end_time = time.perf_counter()
                     self.scaler.unscale_(self.optimizer)
                     if self.track_grad_norm:
-                        grad_norm_dict = self._clip_grad_norm()
-                    self._get_grad_norm()
+                        grad_norm_dict = self._get_grad_norm()
+                    self._clip_grad_norm
                     self.scaler.step(self.optimizer) 
                     self.scaler.update()
                     self.scheduler.step()
                 else:
+                    if dist.get_rank() == 0:
+                        start_time = time.time()
                     logits = self.model(X) 
                     loss = self.criterion(logits.view(-1, logits.size(-1)), y.view(-1))
                     pplx = torch.exp(loss)
                     loss_avg, pplx_avg = self._get_avg_rank_loss_pplx(loss, pplx) 
                     loss.backward()
+                    if dist.get_rank() == 0:
+                        end_time = time.time()
                     self._clip_grad_norm()
                     if self.track_grad_norm:
                         grad_norm_dict = self._get_grad_norm()
@@ -171,7 +188,8 @@ class Trainer:
                
                 if dist.get_rank() == 0: 
                     progress_bar.set_description(desc = f"Epoch: {epoch + 1} | Local step: {i} | \
-                                                 Global step: {global_steps} | Loss: {loss_avg.item()} | pplx: {pplx_avg.item()} | Time: {end_time - start_time}") 
+                                                 Global step: {global_steps} | Loss: {loss_avg.item()} \
+                                                 | pplx: {pplx_avg.item()} | Time: {end_time - start_time}") 
                
                 if self.wandb_: 
                     wandb_dict = {
@@ -206,7 +224,6 @@ class Trainer:
                         self._clr_mem(gc_ = True, cuda_clr_cache = True, X = X, y = y, logits = logits)
                     
                     val_dataloader = self._get_val_dataloader(self.X_val_path, self.y_val_path)
-                   
                     val_progress_bar = tqdm(enumerate(val_dataloader), desc = "Evaluating", total = len(val_dataloader),
                                         disable = (dist.get_rank()!=0 and self.parallel_type in ['fsdp', 'ddp']))
                    
@@ -287,13 +304,22 @@ class Trainer:
         
         if self.parallel_type in ['fsdp', 'ddp']:
             if not isinstance(self.dataloader.sampler, DistributedSampler):
-                raise ValueError('if parallel_type is fsdp or ddp, then the sampler of the dataloader must DistributedSampler')
+                raise ValueError('if parallel_type is fsdp or ddp, then the sampler of \
+                                 the dataloader must DistributedSampler')
             
     def _get_model(self, model):
         local_rank = int(os.environ['LOCAL_RANK'])
         if self.parallel_type in ['ddp']:
             return DDP(model.to(self.device), device_ids = [local_rank])
         elif self.parallel_type in ['fsdp']:
+            if self.fsdp_wrap_policy == 'transformer':
+                auto_wrap_policy = functools.partial(
+                    transformer_auto_wrap_policy, 
+                    transformer_layer_cls = {
+                        TransformerBlock, 
+                        }
+                    )
+                return FSDP(model.to(self.device), device_id = [local_rank], auto_wrap_policy = auto_wrap_policy)
             return FSDP(model.to(self.device), device_id = [local_rank])
         else:
             return model.to(self.device)            
@@ -381,7 +407,7 @@ class Trainer:
                 **self.run_config
             ) 
 
-    def _compile_wamrup(self):
+    def _compile_warmup(self):
         if self._compile:
             print('Running compile wamrup')
             x = torch.randint(low = 0, high = self.vocab_size, size = (self.batch_size, self.context_length))

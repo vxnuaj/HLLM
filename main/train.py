@@ -11,7 +11,7 @@ from train_utils import Trainer, Config, get_scheduler
 from dataloader import get_data, get_dataloader
 
 root_path = 'main/configs'
-data_root_path = 'data/train'
+data_root_path = 'data/tensors/train'
 
 # GET CONFIGS FROM configs/{}.json
 
@@ -54,8 +54,12 @@ model_config = Config.get_config(
 
 X, y = get_data(dataloader_config['data_root_path'])
 dataloader = get_dataloader(X, y, **dataloader_config)
-model = torch.compile(LLaMA(**model_config))
-trainer_config = Config(**train_config)
+
+if model_config['compile']:
+    model = torch.compile(LLaMA(**model_config))
+else:
+    model = LLaMA(**model_config)    
+    
 optimizer = opt.AdamW(**opt_config)
 scheduler = get_scheduler(optimizer, **lr_config)
 criterion = nn.CrossEntropy(**loss_config)
@@ -67,7 +71,7 @@ trainer = Trainer(
     criterion = criterion,
     dataloader = dataloader,
     scheduler = scheduler,
-    config = trainer_config
+    config = train_config
 )
 
 trainer.train()

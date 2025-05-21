@@ -1,8 +1,12 @@
 import torch
 import torch.nn as nn
 import warnings
+import sys
+import os
 
-from model.blocks import PositionalEmbedding, TransformerBlock
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'blocks')))
+
+from blocks import TransformerBlock, PositionalEmbedding
 
 class LLaMA(nn.Module):
     """
@@ -79,6 +83,9 @@ class LLaMA(nn.Module):
             AssertionError: If pos_emb_type is not a string.
         """
         super().__init__()
+
+
+        #assert isinstance(flash_attn_dtype, torch.dtype), "flash_attn_dtype must be a torch.dtype"
        
         self._supress_warnings(supress_warnings) 
         self._check_pos_emb_type(pos_emb_type)
@@ -99,7 +106,10 @@ class LLaMA(nn.Module):
         self.p_threshold = p_threshold
         self.p_threshold_steps_fraction = p_threshold_steps_fraction
         self.flash_attn = flash_attn
-        self.flash_attn_dtype = flash_attn_dtype
+        
+        self.flash_attn_dtype = getattr(torch, flash_attn_dtype)
+        assert isinstance(self.flash_attn_dtype, torch.dtype), "flash_attn_dtype must be a torch.dtype" 
+        
         self.verbose = verbose
 
         self.embeddings = nn.Embedding(

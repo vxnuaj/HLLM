@@ -24,7 +24,12 @@ This repository contains code for building, profiling, and training a variant of
     python conf_prof/analyze_times.py
     ```
 5. View results under `conf_proj/results/results.json`
-
+7. Preprocess & Train:
+    ```bash
+    cd main 
+    chmod +x run.sh
+    ./run.sh
+    ```
 
 ### TODO
 
