@@ -45,7 +45,8 @@ from torch.utils.data import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
-from torch.amp import autocast, GradScaler
+from torch.amp import autocast
+from torch.cuda.amp import GradScaler
 from torch.optim.lr_scheduler import LambdaLR
 from dataloader import get_dataloader
 from contextlib import contextmanager
@@ -59,29 +60,8 @@ from model import LLaMA
 from blocks import TransformerBlock
 from dotenv import load_dotenv
 
-load_dotenv() 
 
-logger = logging.getLogger(__name__)
 
-def setup_logger(log_level="INFO", log_root_path=None, return_date_time = False):
-
-    logger.handlers = []
-    logger.setLevel(log_level)
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    
-    console_handler = logging.StreamHandler()
-    console_handler.setFormatter(formatter)
-    logger.addHandler(console_handler)
-    
-    if log_root_path and dist.is_initialized() and dist.get_rank() == 0:
-        os.makedirs(log_root_path, exist_ok=True)
-        date_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        file_handler = logging.FileHandler(os.path.join(log_root_path, f"run_{date_time}.log"))
-        file_handler.setFormatter(formatter)
-        logger.addHandler(file_handler)
-    
-    if return_date_time:
-        return date_time
 
 class Trainer:
     def __init__(
@@ -103,8 +83,8 @@ class Trainer:
         self.wandb_config = WandbConfig(**wandb_config)
         self.train_config = TrainingConfig(**train_config)
       
-        self.train_dataloader_config = dataloader_config.train_dataloader_config 
-        self.val_dataloader_config = dataloader_config.val_dataloader_config 
+        self.train_dataloader_config = self.dataloader_config.train_dataloader_config 
+        self.val_dataloader_config = self.dataloader_config.val_dataloader_config 
        
         self.vocab_size = self.train_config.vocab_size 
         self.batch_size = self.train_dataloader_config['train_batch_size'] 
@@ -120,7 +100,7 @@ class Trainer:
         
         self.val_steps = self.train_config.val_steps
         self.mixed_precision = self.train_config.mixed_precision
-        self.mixed_precision_dtype = self.train_config.mixed_precision_dtype
+        self.mixed_precision_dtype = self._get_mixed_precision_dtype(self.train_config.mixed_precision_dtype) if self.train_config.mixed_precision else None
         self.max_grad_norm = self.train_config.max_grad_norm
         self.track_grad_norm = self.train_config.track_grad_norm
         self.parallel_type = self.train_config.parallel_type
@@ -129,6 +109,7 @@ class Trainer:
         self.val_shuffle = self.val_dataloader_config['val_shuffle']
         self.val_pin_memory = self.val_dataloader_config['val_pin_memory']
         self.val_mixed_precision = self.train_config.val_mixed_precision
+        self.val_mixed_precision_dtype = self._get_mixed_precision_dtype(self.train_config.val_mixed_precision_dtype) if self.train_config.val_mixed_precision else None
         self.val_data_root_path = self.val_dataloader_config['val_data_root_path']
         self.wandb_ = self.train_config.wandb 
         self._compile = self.train_config._compile
@@ -137,31 +118,49 @@ class Trainer:
         self.log_root_path = self.train_config.log_root_path if hasattr(self.train_config, 'log_root_path') else None
         self.fsdp_wrap_policy = self.train_config.fsdp_wrap_policy
         self.model_name = self.model_config.model_name
-       
-        self.run_id = input("Enter Run ID (3 digit integer, e.g. 001):") 
-       
+
+        self.logger = logging.getLogger(__name__)      
+        date_time = self.setup_logger(log_level=self.log_level, log_root_path=self.log_root_path, return_date_time = True)
+        self.run_start_date_time = date_time
+        
+        load_dotenv() 
+        
         self.hf_token = os.environ.get('HF_TOKEN')
-        self.wandb_token = os.environ.get('WANDB_TOKEN')
+        self.wandb_token = os.environ.get('WANDB_API_KEY')
        
         assert self.hf_token is not None and self.save_hf, ValueError(f'HF_TOKEN must be specified if save_hf is True to save model \
                                                                       checkpoints to hugging face repo {self.hf_repo_id}')
         assert self.wandb_token is not None and self.wandb_, ValueError(f'WANDB_TOKEN must be specified if wandb is True, \
-                                                            to log the training run to wandb project {self.wandb_config.project} as \
-                                                            {self.wandb_config.name + "_RUN_" + self.run_id}')
+                                                            to log the training run to wandb project {self.wandb_config.project}')
        
+        self.scaler = GradScaler() if self.mixed_precision else None
+
+        self._setup_parallel()
+        self.device = self._get_device()
+        
+        self.model = self._get_model(asdict(self.model_config))
+ 
+        self.criterion = nn.CrossEntropyLoss(**self.criterion_config)
+        self.optimizer = opt.AdamW(self.model.parameters(), **asdict(self.optimizer_config))
+        self.scheduler = get_scheduler(self.optimizer, **asdict(self.scheduler_config))
+     
+     
+        if dist.get_rank() == 0:
+            self.run_id = input("Enter Run ID (3 digit integer, e.g. 001):") 
+        
+        
+        
         if self.wandb_:
-            logger.info(f"Logging to wandb project {self.wandb_config.project} as {self.wandb_config.name + "_RUN_" + self.run_id}")
+            self.logger.info(f"Logging to wandb project {self.wandb_config.project} as {self.wandb_config.name}_RUN_{self.run_id}")
             wandb.login(token = self.wandb_token) 
         if self.save_hf:
-            logger.info(f"Logging to hugging face repo {self.hf_repo_id}")
+            self.logger.info(f"Logging to hugging face repo {self.hf_repo_id}")
             hf_login(token = self.hf_token) 
+
+        
        
-        date_time = setup_logger(log_level=self.log_level, log_root_path=self.log_root_path, return_date_time = True)
-     
-        self.run_start_date_time = date_time
-       
-        logger.setLevel(self.log_level)
-        logger.info(f"Initializing {self.model_name.upper()}") 
+        self.logger.setLevel(self.log_level)
+        self.logger.info(f"Initializing {self.model_name.upper()}") 
         
         with open(os.path.join(self.save_checkpoint_path, f"RUN_{self.run_id}", \
                   f"RUN_{self.run_id}_DATETIME_{self.run_start_date_time}_CONFIG.json"), 'w') as f:
@@ -178,17 +177,6 @@ class Trainer:
            
             json.dump(run_config_dict, f, indent = 4)
         
-        self.scaler = GradScaler() if self.mixed_precision else None
-        self._check_dataloader_sampler()
-        self._setup_parallel()
-        self.device = self._get_device()
-        
-        self.model = self._get_model(self.model_config)
- 
-        self.criterion = nn.CrossEntropyLoss(**self.criterion_config)
-        self.optimizer = opt.AdamW(self.model.parameters(), **asdict(self.optimizer_config))
-        self.scheduler = get_scheduler(self.optimizer, **asdict(self.scheduler_config))
-
         self.train_data_root_path = self.dataloader_config.train_data_root_path
  
     def train(self):
@@ -202,15 +190,16 @@ class Trainer:
         
         self.dataloader = get_dataloader(X, y, parallel_type = self.parallel_type, 
                                          rank = dist.get_rank(), **self.train_dataloader_config)
-       
-        with supress_logging(logger = logger):
+        self._check_dataloader_sampler()      
+        
+        with supress_logging(logger = self.logger):
             for epoch in range(self.epochs):
                 progress_bar = tqdm(enumerate(self.dataloader), desc="Training", total=len(self.dataloader), 
                                     disable = (dist.get_rank()!=0 and self.parallel_type in ['fsdp', 'ddp']))
                 for i, (X, y) in progress_bar:
                     X, y = X.to(self.device, non_blocking = True), y.to(self.device, non_blocking = True)
                 if self.mixed_precision:
-                    with autocast(device_type = 'cuda', dtype = self._get_mixed_precision_dtype()):
+                    with autocast(device_type = 'cuda', dtype = self.mixed_precision_dtype()):
                         if is_main_rank:
                             start_time = time.perf_counter()
                         logits = self.model(X)
@@ -299,7 +288,7 @@ class Trainer:
                             X_val, y_val = X_val.to(self.device, non_blocking = True), y_val.to(self.device, non_blocking = True)
                             
                             if self.val_mixed_precision:
-                                with autocast(device_type = 'cuda', dtype = torch.float16):
+                                with autocast(device_type = 'cuda', dtype = self.val_mixed_precision_dtype):
                                     logits = self.model(X_val)
                                     loss = self.criterion(logits.view(-1, logits.size(-1)), y_val.view(-1))
                                 pplx = torch.exp(loss)
@@ -354,7 +343,7 @@ class Trainer:
             
     def _check_device_warn(self):
         if self.device.type == 'cpu':
-            logger.warning('Training on CPU')
+            self.logger.warning('Training on CPU')
             cont = input('Continue [y/n]?')
             if cont.lower() == 'n':
                 sys.exit(0)
@@ -369,7 +358,7 @@ class Trainer:
                             Did you run `train.py` with torchrun?")
     
     def _cleanup(self):
-        logger.info("Cleaning up Distributed Process Group") 
+        self.logger.info("Cleaning up Distributed Process Group") 
         dist.destroy_process_group()
         
     def _get_device(self):
@@ -383,20 +372,20 @@ class Trainer:
                                  the dataloader must DistributedSampler')
             
     def _get_model(self, model_config):
-        logger.info("Initializing Model")
+        self.logger.info("Initializing Model")
         model = LLaMA(**model_config)
         if self._compile:
-            logger.info("Compiling Model")
+            self.logger.info("Compiling Model")
             model = torch.compile(model)
         
         local_rank = int(os.environ['LOCAL_RANK'])
         if self.parallel_type in ['ddp']:
-            logger.info("Wrapping model with DDP")
+            self.logger.info("Wrapping model with DDP")
             return DDP(model.to(self.device), device_ids = [local_rank])
         elif self.parallel_type in ['fsdp']:
-            logger.info("Wrapping model with FSDP")
+            self.logger.info("Wrapping model with FSDP")
             if self.fsdp_wrap_policy == 'transformer':
-                logger.info(f"Initiatlizing FSDP with {self.fsdp_wrap_policy} policy") 
+                self.logger.info(f"Initiatlizing FSDP with {self.fsdp_wrap_policy} policy") 
                 auto_wrap_policy = functools.partial(
                     transformer_auto_wrap_policy, 
                     transformer_layer_cls = {
@@ -405,12 +394,12 @@ class Trainer:
                     )
                 return FSDP(model.to(self.device), device_id = [local_rank], auto_wrap_policy = auto_wrap_policy)
             elif self.fsdp_wrap_policy == 'auto' or self.fsdp_wrap_policy == None or self.fsdp_wrap_policy == 'none':
-                logger.info(f"Initiatlizing FSDP with auto policy") 
+                self.logger.info(f"Initiatlizing FSDP with auto policy") 
                 return FSDP(model.to(self.device), device_id = [local_rank])
             else:
                 raise ValueError(f"Invalid fsdp_wrap_policy: {self.fsdp_wrap_policy}")
         else:
-            logger.info("Not using parallelism")
+            self.logger.info("Not using parallelism")
             return model.to(self.device)            
             
     def _get_avg_rank_loss_pplx(self, loss, pplx):
@@ -429,7 +418,7 @@ class Trainer:
             return loss_avg, pplx_avg
         
     def _get_model_state_dict(self):
-        logger.info('Getting model state dict')    
+        self.logger.info('Getting model state dict')    
         if self.parallel_type == 'ddp':
             return self.model.module.state_dict()
         elif self.parallel_type == 'fsdp':
@@ -440,14 +429,14 @@ class Trainer:
                 return self.model.state_dict()
         
     def _get_optim_state_dict(self):
-        logger.info('Getting optimizer state dict')    
+        self.logger.info('Getting optimizer state dict')    
         if self.parallel_type == 'fsdp':
             return FSDP.optim_state_dict(self.model, self.optimizer, rank0_only=True)
         else:
             return self.optimizer.state_dict()
 
     def _get_scheduler_state_dict(self):
-        logger.info('Getting scheduler state dict')
+        self.logger.info('Getting scheduler state dict')
         if self.parallel_type in ['fsdp', 'ddp']:
             if dist.get_rank() == 0:
                 return self.scheduler.state_dict()
@@ -466,7 +455,7 @@ class Trainer:
        
         # save_checkpoint_root_path originiates from the train_config.json as save_checkpoint_root_path
         
-        logger.info(f"Saving checkpoint at epoch {epoch} and global steps {global_steps}.")
+        self.logger.info(f"Saving checkpoint at epoch {epoch} and global steps {global_steps}.")
 
         if dist.get_rank() == 0:
             root_path = os.path.join(self.save_checkpoint_path, f"RUN_{self.run_id}") # {save_checkpoint_root_path}/RUN_{self.run_id}
@@ -478,11 +467,11 @@ class Trainer:
                 f = os.path.join(root_path, f'RUN_{self.run_id}_DATETIME_{self.run_start_date_time}_checkpoint_{epoch}_step_{steps}_global_steps_{global_steps}.pt')
             ) 
             
-            logger.info(f"Saved checkpoint at epoch {epoch} and global steps {global_steps}.")
+            self.logger.info(f"Saved checkpoint at epoch {epoch} and global steps {global_steps}.")
            
             if self.save_hf and self.hf_repo_exists:
    
-                logger.info(f"Saving checkpoint to hugging face at epoch {epoch} and global steps {global_steps}.")
+                self.logger.info(f"Saving checkpoint to hugging face at epoch {epoch} and global steps {global_steps}.")
     
                 assert self.hf_repo_id is not None, ValueError('hf_repo_id must be specified')
                 assert self.hf_root_path is not None, ValueError('hf_root_path must be specified')
@@ -500,8 +489,8 @@ class Trainer:
                     )
                 
                 except Exception as e:
-                    logger.error(f"Failed to upload checkpoint to hugging face: {e}")
-                    logger.error(f"Traceback: \n\n {traceback.format_exc()}")
+                    self.logger.error(f"Failed to upload checkpoint to hugging face: {e}")
+                    self.logger.error(f"Traceback: \n\n {traceback.format_exc()}")
                     raise
                
                 try: 
@@ -515,21 +504,21 @@ class Trainer:
                     )
                 
                 except Exception as e:
-                    logger.error(f"Failed to upload config to hugging face: {e}")
-                    logger.error(f"Traceback: \n\n {traceback.format_exc()}")
+                    self.logger.error(f"Failed to upload config to hugging face: {e}")
+                    self.logger.error(f"Traceback: \n\n {traceback.format_exc()}")
                     raise 
            
-                logger.info(f"Saved checkpoint at epoch {epoch} and global steps {global_steps} to hugging face.")
+                self.logger.info(f"Saved checkpoint at epoch {epoch} and global steps {global_steps} to hugging face.")
            
             elif self.save_hf and not self.hf_repo_exists:
                 
-                logger.info(f"Creating hugging face repo at {self.hf_repo_id}") 
+                self.logger.info(f"Creating hugging face repo at {self.hf_repo_id}") 
           
                 assert self.hf_repo_id is not None, ValueError('hf_repo_id must be specified')
                 assert self.hf_root_path is not None, ValueError('hf_root_path must be specified')
                
                 try:
-                    logger.info(f"Creating hugging face repo at {self.hf_repo_id}") 
+                    self.logger.info(f"Creating hugging face repo at {self.hf_repo_id}") 
                     create_repo(
                         repo_id = self.hf_repo_id,
                         repo_type = self.hf_repo_type if self.hf_repo_type else None,
@@ -537,11 +526,11 @@ class Trainer:
                     )
                 
                 except Exception as e:
-                    logger.error(f"Failed to create hugging face repo: {e}")
-                    logger.error(f"Traceback: \n\n {traceback.format_exc()}")
+                    self.logger.error(f"Failed to create hugging face repo: {e}")
+                    self.logger.error(f"Traceback: \n\n {traceback.format_exc()}")
                     raise
            
-                logger.info(f"Created hugging face repo at {self.hf_repo_id}")
+                self.logger.info(f"Created hugging face repo at {self.hf_repo_id}")
                 
                 self.hf_repo_exists = True 
                 
@@ -553,24 +542,34 @@ class Trainer:
                     steps = steps,
                     global_steps = global_steps
                 )
+          
+    def _get_mixed_precision_dtype(self, mixed_precision_dtype=None):
+      
+        assert mixed_precision_dtype is not None, ValueError('mixed_precision_dtype must be specified')
+        if mixed_precision_dtype.lower() == "bf16":
+            return torch.bfloat16
+        elif mixed_precision_dtype.lower() == "f16":
+            return torch.float16
+        else:
+            raise ValueError(f"Invalid mixed precision dtype: {self.mixed_precision}, must be 'bf16' or 'f16'") 
             
     def _clr_mem(self, gc_ = False, cuda_clr_cache = True, *args, **kwargs):
         
         if gc_:
-            logger.info('Collecting garbage.')
+            self.logger.info('Collecting garbage.')
             gc.collect() 
         if cuda_clr_cache:
-            logger.info('Clearing cuda cache.')
+            self.logger.info('Clearing cuda cache.')
             torch.cuda.empty_cache()
         for i in args:
-            logger.info(f'Deleting {i}')
+            self.logger.info(f'Deleting {i}')
             del i
         for key in kwargs:
             logger.info(f'Deleting {key}')
             del kwargs[key] 
             
     def _get_val_dataloader(self):
-        logger.info('Loading validation data.') 
+        self.logger.info('Loading validation data.') 
         X_val, y_val = get_data(self.val_data_root_path)
         
         val_dataloader = get_dataloader(
@@ -588,23 +587,23 @@ class Trainer:
     
     def _init_wandb(self):
         if self.wandb_:
-            logger.info(f'Initializing wandb | Project: {self.wandb_config.project} | Run: {self.wandb_config.name + "_RUN_" + self.run_id}')
+            self.logger.info(f'Initializing wandb | Project: {self.wandb_config.project} | Run: {self.wandb_config.name}_RUN_{self.run_id}')
             assert isinstance(self.wandb_config, WandbConfig), ValueError('wandb_config must be type WandbConfig')
             self.wandb_config.name = self.wandb_config.name + "_RUN_" + self.run_id 
 
             wandb.init(
                 **asdict(self.wandb_config)
             ) 
-            logger.info('Initialized wandb')
+            self.logger.info('Initialized wandb')
 
     def _compile_warmup(self):
         if self._compile:
-            logger.info('Running compile warmup')
+            self.logger.info('Running compile warmup')
             x = torch.randint(low = 0, high = self.vocab_size, size = (self.batch_size, self.context_length))
             for _ in tqdm(range(self._compile_warmup_steps), desc = 'Compile warmup.', total = self._compile_warmup_steps):
                 self.model(x)
             self._clr_mem(gc_= True, cuda_clr_cache=True, x = x) 
-            logger.info('Finished running compile warmup') 
+            self.logger.info('Finished running compile warmup') 
 
     def _get_mixed_precision_dtype(self):
         if self.mixed_precision.lower() == "bf16":
@@ -628,18 +627,30 @@ class Trainer:
         else:
             raise ValueError(f"Invalid log level: {self.log_level}")
 
-    def _login_to_hf(self):
-        
-        return
+    def setup_logger(self, log_level="INFO", log_root_path=None, return_date_time = False):
 
-    def _login_to_wandb(self):
-        wandb.login(token = self.wandb_token)
-        return
+        self.logger.handlers = []
+        self.logger.setLevel(log_level)
+        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        
+        console_handler = logging.StreamHandler()
+        console_handler.setFormatter(formatter)
+        self.logger.addHandler(console_handler)
+        date_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+
+        if log_root_path and dist.is_initialized() and dist.get_rank() == 0:
+            os.makedirs(log_root_path, exist_ok=True)
+            file_handler = logging.FileHandler(os.path.join(log_root_path, f"run_{date_time}.log"))
+            file_handler.setFormatter(formatter)
+            self.logger.addHandler(file_handler)
+        
+        if return_date_time:
+            return date_time
 
 def get_scheduler(optimizer, warmup_steps, constant_steps, decay_steps, max_lr, min_lr, *args, **kwargs):
    
     if not min_lr <= optimizer.param_groups[0]['initial_lr'] <= max_lr:
-        logger.warning(f"min_lr {min_lr} is not between optimizer's initial_lr "
+        self.logger.warning(f"min_lr {min_lr} is not between optimizer's initial_lr "
                      f"{optimizer.param_groups[0]['initial_lr']} and max_lr {max_lr}")
     
     cycle_length = warmup_steps + constant_steps + decay_steps
@@ -662,7 +673,7 @@ def get_scheduler(optimizer, warmup_steps, constant_steps, decay_steps, max_lr, 
     return LambdaLR(optimizer, lr_lambda)
 
 @contextmanager
-def supress_logging(logger = logger):
+def supress_logging(logger):
     stream_handlers = [h for h in logger.handlers if isinstance(h, logging.StreamHandler)]
     for h in stream_handlers:
         logger.removeHandler(h)

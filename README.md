@@ -58,8 +58,8 @@ This repository contains code for building, profiling, and training a variant of
   - [X] Make HF Repo for the dataset and add the upload script for the dataset and the tokenizer.
 
 - [ ] Test Pipeline | on GPU.
-  - [ ] Tokenizer a small set of samples
-    - [ ] Verify that we'll be using the 0th index for ignore_index in the loss
+  - [X] Tokenizer a small set of samples
+    -[X] Verify that we'll be using the 0th index for ignore_index in the loss
   - [ ] Verify that the model is training.
     - [ ] DDP
     - [ ] FSDP

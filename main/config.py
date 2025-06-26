@@ -3,36 +3,31 @@ import torch
 import json
 
 from dataclasses import dataclass, field
+from typing import Optional, Dict, Any
 
-@dataclass 
+@dataclass
 class TrainingConfig:
-    vocab_size:int
-    batch_size:int
-    context_length:int
-    epochs:int
-    checkpoint_steps:int
-    save_checkpoint_path:str
-    save_hf:bool
-    hf_repo_config:dict
-    val_steps:int
-    mixed_precision:bool
-    mixed_precision_dtype:torch.dtype
-    max_grad_norm:float
-    track_grad_norm:bool
-    parallel_type:str
-    val_batch_size:int
-    val_num_workers:int
-    val_shuffle:bool
-    val_pin_memory:bool
-    val_mixed_precision:bool
-    X_val_path:str
-    y_val_path:str
-    wandb:bool
-    _compile:bool
-    _compile_warmup_steps:int
-    log_level:str
-    log_root_path:str
-    extra_args: dict = field(default_factory = dict)
+    vocab_size: int
+    context_length: int
+    epochs: int
+    checkpoint_steps: Optional[int] 
+    save_checkpoint_path: str
+    save_hf: bool
+    val_steps: str
+    mixed_precision: bool
+    max_grad_norm: float
+    track_grad_norm: bool
+    parallel_type: str
+    val_mixed_precision: bool
+    val_mixed_precision_dtype: torch.dtype
+    fsdp_wrap_policy: str
+    wandb: bool
+    log_level: str
+    _compile: bool
+    _compile_warmup_steps: int
+    hf_repo_config: Dict[str, Any] = field(default_factory=dict)
+    extra_args: Dict[str, Any] = field(default_factory=dict)
+    mixed_precision_dtype: torch.dtype = torch.float16
 
     def __init__(self, **kwargs):
         fields = TrainingConfig.__dataclass_fields__
@@ -122,7 +117,7 @@ class ModelConfig:
     flash_attn_dtype:torch.dtype
     supress_warnings:bool
     verbose:bool
-    _model_name:str
+    model_name:str
     extra_args: dict = field(default_factory = dict)
 
     def __init__(self, **kwargs):
@@ -144,8 +139,8 @@ class DataloaderConfig:
         self.extra_args = kwargs    
 
 def get_config(root_path:str, config_type:str):
-    assert config_type in ['loss', 'lr', 'opt', 'train', 'wandb', 'model', 'dataloader'], ValueError("config_type must be in 'loss', 'lr', 'opt' or 'train'")
-    if config_type == 'loss':
+    assert config_type in ['criterion', 'lr', 'opt', 'train', 'wandb', 'model', 'dataloader'], ValueError("config_type must be in 'loss', 'lr', 'opt' or 'train'")
+    if config_type == 'criterion':
         with open(os.path.join(root_path, 'criterion_config.json'), 'r') as f:
             return json.load(f)
     elif config_type == 'lr':
@@ -164,5 +159,5 @@ def get_config(root_path:str, config_type:str):
         with open(os.path.join(root_path, 'model_config.json'), 'r') as f:
             return json.load(f)                  
     elif config_type == 'dataloader':
-        with open(os.path.join(root_path, 'dataloader_config.json', 'r')) as f:
+        with open(os.path.join(root_path, 'dataloader_config.json'), 'r') as f:
             return json.load(f)

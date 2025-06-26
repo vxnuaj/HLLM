@@ -1,8 +1,3 @@
-'''
-TODO 
-- [ ] Verify that we're structuring the training code and using the classes properly.
-'''
-
 import os
 import sys 
 
@@ -27,6 +22,7 @@ trainer = Trainer(
     dataloader_config = dataloader_config,
     optimizer_config = opt_config,
     scheduler_config = lr_config,
+    wandb_config = wandb_config,
     train_config = train_config
 )
 
