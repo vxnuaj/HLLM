@@ -313,7 +313,7 @@ class MultiHeadSelfAttention(nn.Module):
         assert d_model == self.d_model, f"Expected d_model to be {self.d_model}, got {d_model}" 
         
         d_head = d_model // self.n_heads
-        
+      
         q = q.view(b, self.n_heads, q_l, d_head)
         k = k.view(b, self.n_heads, k_l, d_head)
         v = v.view(b, self.n_heads, v_l, d_head)

@@ -53,6 +53,7 @@ class LLaMA(nn.Module):
         flash_attn_dtype:torch.dtype = torch.float16,
         supress_warnings: bool = True,
         verbose:bool = False,
+        model_name:str = None,
         *args,
         **kwargs
         ):
@@ -90,6 +91,7 @@ class LLaMA(nn.Module):
         self._supress_warnings(supress_warnings) 
         self._check_pos_emb_type(pos_emb_type)
 
+
         self.context_len = context_len
         self.d_model = d_model
         self.n_heads = n_heads
@@ -109,7 +111,8 @@ class LLaMA(nn.Module):
         
         self.flash_attn_dtype = getattr(torch, flash_attn_dtype)
         assert isinstance(self.flash_attn_dtype, torch.dtype), "flash_attn_dtype must be a torch.dtype" 
-        
+       
+        self.model_name = model_name
         self.verbose = verbose
 
         self.embeddings = nn.Embedding(
@@ -144,7 +147,7 @@ class LLaMA(nn.Module):
         ])
         
         self.rmsnorm = nn.RMSNorm(normalized_shape=self.d_model)
-        self.linear = nn.Linear(self.d_model, self.vocab_size)
+        self.linear = nn.Linear(self.d_model, self.vocab_size, bias = False)
         self.linear.weight = self.embeddings.weight
  
         self._init_weights()

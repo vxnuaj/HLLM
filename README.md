@@ -31,7 +31,52 @@ This repository contains code for building, profiling, and training a variant of
     ./run.sh
     ```
 
-### TODO
+# Training
 
-- [ ] Final Inference & Automated FLOPs analysis.
-- [ ] Stress Test.
+**Compute**: 2x4090s
+
+# TODO
+
+### Pre-Trianing Run
+
+- [X] `train_utils.py`
+- [X] `train.py`
+- [X] Figure out if there's anything else you can do to optimize the training loop.
+
+## Training
+
+- [ ] Figure out final configurations for the model ( .json files ).
+  - [x] dataloader_config.json
+  - [X] loss_config.json
+  - [X] lr_config.json
+  - [X] model_config.json
+  - [X] opt_config.json
+  - [ ] train_config.json
+    - [X] Make HF Repo for Model
+    - [ ] Update the train_config.json
+  - [X] wandb_config.json
+  - [X] Make HF Repo for the dataset and add the upload script for the dataset and the tokenizer.
+
+- [ ] Test Pipeline.
+  - [ ] Tokenizer a small set of samples
+    - [ ] Verify that we'll be using the 0th index for ignore_index in the loss
+  - [ ] Verify that the model is training.
+    - [ ] DDP
+    - [ ] FSDP
+  - [ ] Verify that the model is saving checkpoints locally.
+  - [ ] Verify that the model is uploading checkpoints to hugging face.
+  - [ ] Verify that the checkpoints are proeprly saved (reusable).
+  - [ ] Verify that the model is uploading dataset to hugging face.
+  - [ ] Verify that the model is logging to wandb.
+
+- [ ] Prep for Pre-Training
+  - [ ] Batch Size - Stress test VRAM to proper batch size for the dataloader_config.json
+  - [ ] Figure out final hyperparameters for the LR Schedule based on batch size.
+
+- [ ] Begin Training
+
+### Inference Hyperparamter Sweep
+
+- [ ] Build out Hyperparameter Sweep for Inference ( using existing model weights for primlinary runs but not actually using it for real results until we finish training the model )
+  - [ ] TBD
+  - [ ] TBD

@@ -1,9 +1,18 @@
 {
-    "data_root_path": "data/train",
-    "batch_size":"batch_size",
-    "num_workers":"num_workers",
-    "shuffle":"shuffle",
-    "pin_memory":"pin_memory",
-    "parallelism_type":"parallelism_type",
-    "rank":"rank"
+    "train_dataloader_config": {
+        "train_batch_size": 64, 
+        "train_num_workers": 12,
+        "train_shuffle": true,
+        "train_pin_memory": true,
+        "train_data_root_path": "data/train"
+    },
+
+    "val_dataloader_config": {
+        "val_batch_size": 64,
+        "val_num_workers": 12,
+        "val_shuffle": false,
+        "val_pin_memory": true,
+        "val_data_root_path": "data/val"
+    }   
+   
 }

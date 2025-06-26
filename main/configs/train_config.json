@@ -1,5 +1,25 @@
 {
-    "epochs": 20,
-    "checkpoint_steps": 21343,
-    "save_checkpoint_path": "ssd/checkpoints"
+    "vocab_size": 10000,
+    "context_length": 512,
+    "epochs": 5,
+    "checkpoint_steps": null,  
+    "save_checkpoint_path": "main/checkpoints",
+    "save_hf": true,
+    "val_steps": "100",
+    "mixed_precision": false, 
+    "max_grad_norm": 1.0,
+    "track_grad_norm": true,
+    "parallel_type": "ddp",
+    "val_mixed_precision": false,
+    "fsdp_wrap_policy": "transformer",
+    "wandb": true,
+    "log_level": "INFO",
+    "_compile": true,
+    "_compile_warmup_steps": 10,
+    "hf_repo_config": {
+        "hf_repo_exists": true,
+        "hf_repo_id": "tiny-research/prometheus",
+        "hf_repo_type": "model",
+        "hf_root_path": "PROMETHEUS_V1_TINY_39.7M/checkpoints"
+    }
 }

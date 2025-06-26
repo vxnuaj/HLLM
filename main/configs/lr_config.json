@@ -1,5 +1,5 @@
 {
-    "warmup_steps": 750,
+    "warmup_steps": 500,
     "constant_steps": 0,
     "decay_steps": 409870,
     "max_lr": 0.0001,

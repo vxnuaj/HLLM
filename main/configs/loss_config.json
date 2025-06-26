@@ -1,3 +1,4 @@
 {
-    "reduction": "mean"
+    "reduction": "none",
+    "ignore_index": 0
 }

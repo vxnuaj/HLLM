@@ -2,6 +2,8 @@ import torch
 import os
 import tinytok.core as tt
 
+from huggingface_hub import HfApi
+
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 save_dir = 'data/'
@@ -15,9 +17,10 @@ file_train = [file_1, file_2, file_3, file_4]
 file_val = [file_val]
 
 # PARAMS -----------------
+
 return_single_str = False
 vocab_size = 10_000
-special_tokens = {'eos': '<|endoftext|>', 'pad': '<|pad|>'} # toks (0, 1) respectively
+special_tokens = {'pad': '<|pad|>','bos': '<|bos|>', 'eos': '<|eos|>', } # toks (0, 1) respectively
 save_tokenizer_path = 'data/tokenizer.json'
 context_len = 512
 processes = 24
@@ -25,30 +28,31 @@ flat_tensor = True
 flat_tensor_val = False
 seq_tensor_size = 25_000
 val_seq_tensor_size = None
-max_toks = 350_000_000  
+max_toks = 266_666_666 # per chinchilla scaling laws
 val_max_toks = None
 batch_first = True
 val_train_n_samples = 2000
 
-X_train_pth = 'data/tensors/train/X'
-y_train_pth = 'data/tensors/train/y'
-val_pth = 'data/tensors/val'
-
-os.makedirs(X_train_pth, exist_ok = True)
-os.makedirs(y_train_pth, exist_ok = True)
-os.makedirs(val_pth, exist_ok = True)
-os.makedirs(save_dir = True)
-
 if __name__ == "__main__":
    
-    tt.download_save_data(save_dir) 
-    
-    os.makedirs(X_train_pth, exist_ok=True)
-    os.makedirs(y_train_pth, exist_ok=True)
-    os.makedirs(val_pth, exist_ok=True)
+    tt.download_tinystories(save_dir) 
+
+    X_train_pth = 'data/tensors/train/X'
+    y_train_pth = 'data/tensors/train/y'
+    X_val_pth = 'data/tensors/val/X'
+    y_val_pth = 'data/tensors/val/y'
+   
+    os.makedirs(X_train_pth, exist_ok = True)
+    os.makedirs(y_train_pth, exist_ok = True)
+    os.makedirs(X_val_pth, exist_ok = True)
+    os.makedirs(y_val_pth, exist_ok = True)
+    os.makedirs(save_dir, exist_ok = True)
+
+    # --- training ---
     
     data = tt.data_process(
         files=file_train,
+        bos_str=special_tokens['bos'],
         eos_str=special_tokens['eos'],
         return_single_str=return_single_str,
         processes=processes
@@ -61,11 +65,12 @@ if __name__ == "__main__":
         save_path=save_tokenizer_path
     )
     
-    data_tensor = tt.tokenize(
+    data_tensor, train_token_count = tt.tokenize(
         data=data,
         tokenizer=tokenizer,
         flat_tensor=flat_tensor,
-        processes=processes
+        processes=processes,
+        return_total_tokens=True
     )
 
     if isinstance(seq_tensor_size, int):
@@ -77,10 +82,12 @@ if __name__ == "__main__":
             processes=processes
         )
         for i, (X, y) in enumerate(sequence_generator):
+            
             torch.save(X, os.path.join(X_train_pth, f'X_train_{i}.pt'))
             torch.save(y, os.path.join(y_train_pth, f'y_train_{i}.pt'))
            
     elif not seq_tensor_size:
+
         X_train, y_train = tt.create_train_sequences_gen(
             data=data_tensor,
             context_len=context_len,
@@ -88,9 +95,13 @@ if __name__ == "__main__":
             max_toks=max_toks,
             processes=processes
         )
+
         torch.save(X_train, os.path.join(X_train_pth, "X_train.pt"))
         torch.save(y_train, os.path.join(y_train_pth, "y_train.pt"))
+
         del X_train, y_train
+
+    # ---  validation --- 
 
     data = tt.data_process(
         files=file_val,
@@ -99,11 +110,12 @@ if __name__ == "__main__":
         processes=processes
     )
 
-    data_tensor = tt.tokenize(
+    data_tensor, val_token_count = tt.tokenize(
         data=data,
         tokenizer=tokenizer,
         flat_tensor=flat_tensor_val,
-        processes=processes
+        processes=processes,
+        return_total_tokens = True
     )
 
     X_val, Y_val = tt.create_val_sequences(
@@ -112,8 +124,47 @@ if __name__ == "__main__":
         padding_value=tokenizer.encode(special_tokens['pad']).ids[0]
     )
    
-    X_val_train = X_val[0:val_train_n_samples+1]
-    Y_val_train = Y_val[0:val_train_n_samples+1]
+    X_val_subset = X_val[0:val_train_n_samples+1]
+    Y_val_subset = Y_val[0:val_train_n_samples+1]
     
-    torch.save(X_val_train, os.path.join(val_pth, 'X_val.pt'))
-    torch.save(Y_val_train, os.path.join(val_pth, 'Y_val.pt'))
+    torch.save(X_val_subset, os.path.join(X_val_pth, 'X_val.pt'))
+    torch.save(Y_val_subset, os.path.join(y_val_pth, 'Y_val.pt'))
+   
+    total_token_count = train_token_count + val_token_count
+    
+    # --- upload to hugging face ---
+    
+    api = HfApi()
+    api.upload_file( # the tokenizer
+        path_or_fileobj=save_tokenizer_path,
+        repo_id='tiny-research/TinyStories',
+        path_in_repo=f'CONTEXT_LEN_{context_len}_TOKENS_{total_token_count}/tokenizer.json',
+    )  
+    
+    # --- training files ---
+    
+    api.upload_folder(
+        folder_path=X_train_pth,
+        repo_id='tiny-research/TinyStories',
+        path_in_repo=f'CONTEXT_LEN_{context_len}_TOKENS_{total_token_count}/TRAIN_TOKENS_{train_token_count}/',
+    )
+  
+    api.upload_folder(
+        folder_path = y_train_pth,
+        repo_id='tiny-research/TinyStories',
+        path_in_repo=f'CONTEXT_LEN_{context_len}_TOKENS_{total_token_count}/TRAIN_TOKENS_{train_token_count}/',
+    )
+   
+    # --- validation files ---
+    
+    api.upload_folder(
+        folder_path=X_val_pth,
+        repo_id='tiny-research/TinyStories',
+        path_in_repo=f'CONTEXT_LEN_{context_len}_TOKENS_{total_token_count}/VAL_TOKENS_{val_token_count}/',
+    )
+    
+    api.upload_folder(
+        folder_path=y_val_pth,
+        repo_id='tiny-research/TinyStories',
+        path_in_repo=f'CONTEXT_LEN_{context_len}_TOKENS_{total_token_count}/VAL_TOKENS_{val_token_count}/',
+    )

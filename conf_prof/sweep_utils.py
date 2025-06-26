@@ -242,7 +242,7 @@ def run_profs(
         if torch.cuda.is_available() and dist.is_available():
             dist.init_process_group(backend='nccl')
 
-        for i, cfg in enumerate(tqdm(config_group, desc=f"Running {parallel_type.upper()} configs")):
+        for i, cfg in enumerate(tqdm(config_group, desc=f"Sweeping Hyperparameters | Running {parallel_type.upper()} configs")):
             try:
                 model = LLaMA(**cfg).to(device)
                 model.train()
