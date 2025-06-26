@@ -3,7 +3,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
 from typing import Union
 
 class TransformerBlock(nn.Module):
@@ -96,8 +95,8 @@ class TransformerBlock(nn.Module):
         v = self.linearV(x)
        
         if _inference and (not hasattr(self, 'k_cache') or self.k_cache is None):
-            self.k_cache = k.to(torch.float16)
-            self.v_cache = v.to(torch.float16)
+            self.k_cache = k
+            self.v_cache = v
         elif _inference and (hasattr(self, 'k_cache') or self.k_cache is not None):
             assert q.shape[1] == 1, f"Expected q sequence length of 1 once KV cache exists, got {q.shape[1]}" 
             assert k.shape[1] == 1, f"Expected k sequence length of 1 once KV cache exists, got {k.shape[1]}"
@@ -332,7 +331,7 @@ class MultiHeadSelfAttention(nn.Module):
             value = v,
             is_causal = True,
             enable_gqa = False
-        ).contiguous().view(b, seq_len, d_model).to(torch.float32)
+        ).contiguous().view(b, seq_len, d_model)
 
         '''
         if self.flash_attn:
@@ -454,7 +453,7 @@ class MultiQueryAttention(nn.Module):
             value = v,
             is_causal = True,
             enable_gqa = True
-        ).contiguous().view(b, seq_len, d_model).to(torch.float32)
+        ).contiguous().view(b, seq_len, d_model)
        
         '''
         if self.flash_attn: 
@@ -655,7 +654,7 @@ class GroupedQueryAttention(nn.Module):
             value = v,
             is_causal = True,
             enable_gqa = True
-        ).contiguous().view(b, l, d_model).to(torch.float32)
+        ).contiguous().view(b, l, d_model)
  
         '''
         if self.flash_attn:

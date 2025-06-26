@@ -1,4 +1,7 @@
-torch==2.7.0
+torch
 tqdm
 wandb
 transformers
+huggingface
+huggingface_hub
+tinytok

@@ -51,13 +51,13 @@ This repository contains code for building, profiling, and training a variant of
   - [X] lr_config.json
   - [X] model_config.json
   - [X] opt_config.json
-  - [ ] train_config.json
+  - [X] train_config.json
     - [X] Make HF Repo for Model
-    - [ ] Update the train_config.json
+    - [X] Update the train_config.json
   - [X] wandb_config.json
   - [X] Make HF Repo for the dataset and add the upload script for the dataset and the tokenizer.
 
-- [ ] Test Pipeline.
+- [ ] Test Pipeline | on GPU.
   - [ ] Tokenizer a small set of samples
     - [ ] Verify that we'll be using the 0th index for ignore_index in the loss
   - [ ] Verify that the model is training.
