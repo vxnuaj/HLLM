@@ -2,7 +2,20 @@ import torch
 import os
 import tinytok.core as tt
 
-from huggingface_hub import HfApi
+from huggingface_hub import HfApi, login, whoami
+from dotenv import load_dotenv
+
+load_dotenv(dotenv_path = 'main/configs/.env')
+
+hf_token = os.environ.get("HF_TOKEN")
+
+if hf_token is None:
+    raise ValueError("HF_TOKEN environment variable is not set. Please set it in your .env file.")
+
+login(token=hf_token)  
+
+print(f"Logged in as: {whoami()['name']}")
+
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -13,13 +26,13 @@ file_3 = 'data/train3.parquet'
 file_4 = 'data/train4.parquet'
 file_val = 'data/validation.parquet'
 
-file_train = [file_1, file_2, file_3, file_4]
+file_train = [file_1]
 file_val = [file_val]
 
 # PARAMS -----------------
 
 return_single_str = False
-vocab_size = 10_000
+vocab_size = 5_000
 special_tokens = {'pad': '<|pad|>','bos': '<|bos|>', 'eos': '<|eos|>', } # toks (0, 1) respectively
 save_tokenizer_path = 'data/tokenizer.json'
 context_len = 512
@@ -34,7 +47,7 @@ batch_first = True
 val_train_n_samples = 2000
 
 if __name__ == "__main__":
-   
+  
     tt.download_tinystories(save_dir) 
 
     X_train_pth = 'data/tensors/train/X'
@@ -105,6 +118,7 @@ if __name__ == "__main__":
 
     data = tt.data_process(
         files=file_val,
+        bos_str=special_tokens['bos'],
         eos_str=special_tokens['eos'],
         return_single_str=return_single_str,
         processes=processes
@@ -131,40 +145,55 @@ if __name__ == "__main__":
     torch.save(Y_val_subset, os.path.join(y_val_pth, 'Y_val.pt'))
    
     total_token_count = train_token_count + val_token_count
+  
+    '''
     
     # --- upload to hugging face ---
-    
+
     api = HfApi()
+
+    api.create_repo(
+        repo_id="tiny-research/TinyStories",
+        repo_type="dataset",
+        exist_ok=True
+    )
+
     api.upload_file( # the tokenizer
         path_or_fileobj=save_tokenizer_path,
         repo_id='tiny-research/TinyStories',
         path_in_repo=f'CONTEXT_LEN_{context_len}_TOKENS_{total_token_count}/tokenizer.json',
+        repo_type = 'dataset'
     )  
-    
+
     # --- training files ---
-    
+
     api.upload_folder(
         folder_path=X_train_pth,
         repo_id='tiny-research/TinyStories',
         path_in_repo=f'CONTEXT_LEN_{context_len}_TOKENS_{total_token_count}/TRAIN_TOKENS_{train_token_count}/',
+        repo_type = "dataset"
     )
-  
+
     api.upload_folder(
         folder_path = y_train_pth,
         repo_id='tiny-research/TinyStories',
         path_in_repo=f'CONTEXT_LEN_{context_len}_TOKENS_{total_token_count}/TRAIN_TOKENS_{train_token_count}/',
+        repo_type = "dataset"        
     )
-   
+
     # --- validation files ---
-    
+
     api.upload_folder(
         folder_path=X_val_pth,
         repo_id='tiny-research/TinyStories',
         path_in_repo=f'CONTEXT_LEN_{context_len}_TOKENS_{total_token_count}/VAL_TOKENS_{val_token_count}/',
+        repo_type = "dataset"        
     )
-    
+
     api.upload_folder(
         folder_path=y_val_pth,
         repo_id='tiny-research/TinyStories',
         path_in_repo=f'CONTEXT_LEN_{context_len}_TOKENS_{total_token_count}/VAL_TOKENS_{val_token_count}/',
+        repo_type = "dataset"        
     )
+    '''
