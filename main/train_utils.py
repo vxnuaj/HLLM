@@ -188,7 +188,7 @@ class Trainer:
         self.dataloader = get_dataloader(X, y, parallel_type = self.parallel_type, 
                                          rank = dist.get_rank(), **self.train_dataloader_config)
         self._check_dataloader_sampler()      
-        
+       
         with supress_logging(logger = self.logger):
             for epoch in range(self.epochs):
                 progress_bar = tqdm(enumerate(self.dataloader), desc="Training", total=len(self.dataloader), 

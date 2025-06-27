@@ -1,15 +1,8 @@
-'''
-NOTE
-Will be a script to narrow down on the possible selection of configs to be the fastest, given the set of json files.
-
-So, I want to get the best times for all sweeps across attn_types (and of course when using gqa would liek to get the best across all n_groups)
-
-'''
-
 import json
 import re
-from tqdm import tqdm
 import os
+
+from rich.progress import track
 
 def safe_load_json(file_path):
     with open(file_path, 'r') as f:
@@ -37,9 +30,8 @@ def get_results(root_dir: str):
     for i, file in enumerate(list_files):
         list_files[i] = os.path.join(root_dir, file, 'metrics.json')
     i = 0
-    for file_path in tqdm(list_files, total=len(list_files), desc="Fetching sweep results"):
+    for file_path in track(sequence = list_files, total=len(list_files), description="Fetching sweep results"):
         if file_path.endswith('.json'):
-            print(file_path)
             result = safe_load_json(file_path)
             results.append(result)
         i += 1
@@ -104,6 +96,5 @@ if __name__ == "__main__":
     top_n = 1
 
     results = get_results(root_dir)
-    print(len(results)) 
     best_configs = get_best_configs(results, metric = "avg_fwd_bwd_time", group_by = 'attn_type', top_n = top_n)
     write_results(best_configs, root_dir = "conf_prof/results", file_name = "time_results.md", top_n = top_n)

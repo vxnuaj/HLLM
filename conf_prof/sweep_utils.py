@@ -3,7 +3,6 @@ Script to sweep across all possible configs for the model under `search_space.ya
 '''
 
 import os
-import math
 import json
 import shutil
 import itertools
@@ -18,8 +17,7 @@ import torch.nn.functional as F
 import torch.distributed as dist
 import logging
 
-from tqdm import tqdm
-
+from rich.progress import track
 from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 from torch.amp import autocast, GradScaler
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -242,7 +240,7 @@ def run_profs(
         if torch.cuda.is_available() and dist.is_available():
             dist.init_process_group(backend='nccl')
 
-        for i, cfg in enumerate(tqdm(config_group, desc=f"Sweeping Hyperparameters | Running {parallel_type.upper()} configs")):
+        for i, cfg in enumerate(track(sequences = config_group, description = f"Sweeping Hyperparameters | Running {parallel_type.upper()} configs")):
             try:
                 model = LLaMA(**cfg).to(device)
                 model.train()
