@@ -60,9 +60,6 @@ from model import LLaMA
 from blocks import TransformerBlock
 from dotenv import load_dotenv
 
-
-
-
 class Trainer:
     def __init__(
         self,
@@ -123,7 +120,7 @@ class Trainer:
         date_time = self.setup_logger(log_level=self.log_level, log_root_path=self.log_root_path, return_date_time = True)
         self.run_start_date_time = date_time
         
-        load_dotenv() 
+        load_dotenv(dotenv_path = 'main/configs/.env') 
         
         self.hf_token = os.environ.get('HF_TOKEN')
         self.wandb_token = os.environ.get('WANDB_API_KEY')
