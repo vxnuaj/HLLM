@@ -52,6 +52,7 @@ from dataloader import get_dataloader
 from contextlib import contextmanager
 from datetime import datetime
 from tqdm import tqdm
+from rich.logging import RichHandler
 from huggingface_hub import HfApi, create_repo, login as hf_login
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'model')))
@@ -71,6 +72,9 @@ class Trainer:
         wandb_config:dict,
         train_config:dict 
         ):
+    
+        assert torch.cuda.is_available(), ValueError("No CUDA device found")
+        torch.cuda.set_device(f"cuda:{os.environ.get('LOCAL_RANK')}")
       
         self.model_config = ModelConfig(**model_config)
         self.criterion_config = CriterionConfig(**criterion_config)
@@ -116,6 +120,9 @@ class Trainer:
         self.fsdp_wrap_policy = self.train_config.fsdp_wrap_policy
         self.model_name = self.model_config.model_name
 
+        self.disable = self.train_config.disable
+        self.disable_exclude = self.train_config.disable_exclude
+
         self.logger = logging.getLogger(__name__)      
         date_time = self.setup_logger(log_level=self.log_level, log_root_path=self.log_root_path, return_date_time = True)
         self.run_start_date_time = date_time
@@ -129,6 +136,7 @@ class Trainer:
                                                                       checkpoints to hugging face repo {self.hf_repo_id}')
         assert self.wandb_token is not None and self.wandb_, ValueError(f'WANDB_TOKEN must be specified if wandb is True, \
                                                             to log the training run to wandb project {self.wandb_config.project}')
+      
        
         self.scaler = GradScaler() if self.mixed_precision else None
 
@@ -136,6 +144,12 @@ class Trainer:
         self.device = self._get_device()
         
         self.model = self._get_model(asdict(self.model_config))
+
+        if dist.get_rank() == 0:
+            with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude):
+                self.logger.info('SUCCESFULLY WRAPPED MODEL IN FSDP /DDP')
+
+        sys.exit(0)
  
         self.criterion = nn.CrossEntropyLoss(**self.criterion_config)
         self.optimizer = opt.AdamW(self.model.parameters(), **asdict(self.optimizer_config))
@@ -145,19 +159,19 @@ class Trainer:
         if dist.get_rank() == 0:
             self.run_id = input("Enter Run ID (3 digit integer, e.g. 001):") 
         
-        
-        
         if self.wandb_:
-            self.logger.info(f"Logging to wandb project {self.wandb_config.project} as {self.wandb_config.name}_RUN_{self.run_id}")
+            with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude):
+                self.logger.info(f"Logging to wandb project {self.wandb_config.project} as {self.wandb_config.name}_RUN_{self.run_id}")
             wandb.login(token = self.wandb_token) 
         if self.save_hf:
-            self.logger.info(f"Logging to hugging face repo {self.hf_repo_id}")
+            with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude):
+                self.logger.info(f"Logging to hugging face repo {self.hf_repo_id}")
             hf_login(token = self.hf_token) 
 
-        
-       
         self.logger.setLevel(self.log_level)
-        self.logger.info(f"Initializing {self.model_name.upper()}") 
+        
+        with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude):
+            self.logger.info(f"Initializing {self.model_name.upper()}") 
         
         with open(os.path.join(self.save_checkpoint_path, f"RUN_{self.run_id}", \
                   f"RUN_{self.run_id}_DATETIME_{self.run_start_date_time}_CONFIG.json"), 'w') as f:
@@ -189,7 +203,7 @@ class Trainer:
                                          rank = dist.get_rank(), **self.train_dataloader_config)
         self._check_dataloader_sampler()      
        
-        with supress_logging(logger = self.logger):
+        with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude):
             for epoch in range(self.epochs):
                 progress_bar = tqdm(enumerate(self.dataloader), desc="Training", total=len(self.dataloader), 
                                     disable = (dist.get_rank()!=0 and self.parallel_type in ['fsdp', 'ddp']))
@@ -340,7 +354,10 @@ class Trainer:
             
     def _check_device_warn(self):
         if self.device.type == 'cpu':
-            self.logger.warning('Training on CPU')
+            
+            with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude):
+                self.logger.warning('Training on CPU')
+            
             cont = input('Continue [y/n]?')
             if cont.lower() == 'n':
                 sys.exit(0)
@@ -355,7 +372,9 @@ class Trainer:
                             Did you run `train.py` with torchrun?")
     
     def _cleanup(self):
-        self.logger.info("Cleaning up Distributed Process Group") 
+        
+        with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
+            self.logger.info("Cleaning up Distributed Process Group") 
         dist.destroy_process_group()
         
     def _get_device(self):
@@ -369,34 +388,51 @@ class Trainer:
                                  the dataloader must DistributedSampler')
             
     def _get_model(self, model_config):
-        self.logger.info("Initializing Model")
+        
+        with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
+            self.logger.info("Initializing Model")
         model = LLaMA(**model_config)
         if self._compile:
-            self.logger.info("Compiling Model")
+            with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
+                self.logger.info("Compiling Model")
             model = torch.compile(model)
         
-        local_rank = int(os.environ['LOCAL_RANK'])
+        local_rank = int(os.environ.get('LOCAL_RANK'))
         if self.parallel_type in ['ddp']:
-            self.logger.info("Wrapping model with DDP")
-            return DDP(model.to(self.device), device_ids = [local_rank])
+            with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
+                self.logger.info("Wrapping model with DDP")
+            model = DDP(model.to(self.device), device_ids = [local_rank])
+            with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
+                self.logger.info("Successfully wrapped model in DDP") 
+            return model
         elif self.parallel_type in ['fsdp']:
-            self.logger.info("Wrapping model with FSDP")
+            with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
+                self.logger.info("Wrapping model with FSDP")
             if self.fsdp_wrap_policy == 'transformer':
-                self.logger.info(f"Initiatlizing FSDP with {self.fsdp_wrap_policy} policy") 
+                with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
+                    self.logger.info(f"Initiatlizing FSDP with {self.fsdp_wrap_policy} policy") 
                 auto_wrap_policy = functools.partial(
                     transformer_auto_wrap_policy, 
                     transformer_layer_cls = {
                         TransformerBlock, 
                         }
                     )
-                return FSDP(model.to(self.device), device_id = [local_rank], auto_wrap_policy = auto_wrap_policy)
+                model = FSDP(model.to(self.device), device_id = [local_rank], auto_wrap_policy = auto_wrap_policy)
+                with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
+                    self.logger.info("Successfully wrapped model in FSDP") 
+                return model
             elif self.fsdp_wrap_policy == 'auto' or self.fsdp_wrap_policy == None or self.fsdp_wrap_policy == 'none':
-                self.logger.info(f"Initiatlizing FSDP with auto policy") 
-                return FSDP(model.to(self.device), device_id = [local_rank])
+                with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
+                    self.logger.info(f"Initiatlizing FSDP with auto policy") 
+                model = FSDP(model.to(self.device), device_id = [local_rank])
+                with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
+                    self.logger.info("Successfully wrapped model in FSDP") 
+                return model
             else:
                 raise ValueError(f"Invalid fsdp_wrap_policy: {self.fsdp_wrap_policy}")
         else:
-            self.logger.info("Not using parallelism")
+            with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
+                self.logger.info("Not using parallelism")
             return model.to(self.device)            
             
     def _get_avg_rank_loss_pplx(self, loss, pplx):
@@ -415,7 +451,9 @@ class Trainer:
             return loss_avg, pplx_avg
         
     def _get_model_state_dict(self):
-        self.logger.info('Getting model state dict')    
+       
+        with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
+            self.logger.info('Getting model state dict')    
         if self.parallel_type == 'ddp':
             return self.model.module.state_dict()
         elif self.parallel_type == 'fsdp':
@@ -426,14 +464,16 @@ class Trainer:
                 return self.model.state_dict()
         
     def _get_optim_state_dict(self):
-        self.logger.info('Getting optimizer state dict')    
+        with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
+            self.logger.info('Getting optimizer state dict')    
         if self.parallel_type == 'fsdp':
             return FSDP.optim_state_dict(self.model, self.optimizer, rank0_only=True)
         else:
             return self.optimizer.state_dict()
 
     def _get_scheduler_state_dict(self):
-        self.logger.info('Getting scheduler state dict')
+        with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
+            self.logger.info('Getting scheduler state dict')
         if self.parallel_type in ['fsdp', 'ddp']:
             if dist.get_rank() == 0:
                 return self.scheduler.state_dict()
@@ -452,7 +492,8 @@ class Trainer:
        
         # save_checkpoint_root_path originiates from the train_config.json as save_checkpoint_root_path
         
-        self.logger.info(f"Saving checkpoint at epoch {epoch} and global steps {global_steps}.")
+        with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
+            self.logger.info(f"Saving checkpoint at epoch {epoch} and global steps {global_steps}.")
 
         if dist.get_rank() == 0:
             root_path = os.path.join(self.save_checkpoint_path, f"RUN_{self.run_id}") # {save_checkpoint_root_path}/RUN_{self.run_id}
@@ -464,11 +505,13 @@ class Trainer:
                 f = os.path.join(root_path, f'RUN_{self.run_id}_DATETIME_{self.run_start_date_time}_checkpoint_{epoch}_step_{steps}_global_steps_{global_steps}.pt')
             ) 
             
-            self.logger.info(f"Saved checkpoint at epoch {epoch} and global steps {global_steps}.")
+            with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
+                self.logger.info(f"Saved checkpoint at epoch {epoch} and global steps {global_steps}.")
            
             if self.save_hf and self.hf_repo_exists:
    
-                self.logger.info(f"Saving checkpoint to hugging face at epoch {epoch} and global steps {global_steps}.")
+                with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
+                    self.logger.info(f"Saving checkpoint to hugging face at epoch {epoch} and global steps {global_steps}.")
     
                 assert self.hf_repo_id is not None, ValueError('hf_repo_id must be specified')
                 assert self.hf_root_path is not None, ValueError('hf_root_path must be specified')
@@ -486,9 +529,11 @@ class Trainer:
                     )
                 
                 except Exception as e:
-                    self.logger.error(f"Failed to upload checkpoint to hugging face: {e}")
-                    self.logger.error(f"Traceback: \n\n {traceback.format_exc()}")
-                    raise
+                   
+                    with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
+                        self.logger.error(f"Failed to upload checkpoint to hugging face: {e}")
+                        self.logger.error(f"Traceback: \n\n {traceback.format_exc()}")
+                        raise
                
                 try: 
                     api.upload_file(
@@ -501,21 +546,26 @@ class Trainer:
                     )
                 
                 except Exception as e:
-                    self.logger.error(f"Failed to upload config to hugging face: {e}")
-                    self.logger.error(f"Traceback: \n\n {traceback.format_exc()}")
-                    raise 
+                    with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
+                        self.logger.error(f"Failed to upload config to hugging face: {e}")
+                        self.logger.error(f"Traceback: \n\n {traceback.format_exc()}")
+                        raise 
            
-                self.logger.info(f"Saved checkpoint at epoch {epoch} and global steps {global_steps} to hugging face.")
+                with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
+                    self.logger.info(f"Saved checkpoint at epoch {epoch} and global steps {global_steps} to hugging face.")
            
             elif self.save_hf and not self.hf_repo_exists:
                 
-                self.logger.info(f"Creating hugging face repo at {self.hf_repo_id}") 
+                with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
+                    self.logger.info(f"Creating hugging face repo at {self.hf_repo_id}") 
           
                 assert self.hf_repo_id is not None, ValueError('hf_repo_id must be specified')
                 assert self.hf_root_path is not None, ValueError('hf_root_path must be specified')
                
                 try:
-                    self.logger.info(f"Creating hugging face repo at {self.hf_repo_id}") 
+                    
+                    with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
+                        self.logger.info(f"Creating hugging face repo at {self.hf_repo_id}") 
                     create_repo(
                         repo_id = self.hf_repo_id,
                         repo_type = self.hf_repo_type if self.hf_repo_type else None,
@@ -523,11 +573,13 @@ class Trainer:
                     )
                 
                 except Exception as e:
-                    self.logger.error(f"Failed to create hugging face repo: {e}")
-                    self.logger.error(f"Traceback: \n\n {traceback.format_exc()}")
-                    raise
+                    with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
+                        self.logger.error(f"Failed to create hugging face repo: {e}")
+                        self.logger.error(f"Traceback: \n\n {traceback.format_exc()}")
+                        raise
            
-                self.logger.info(f"Created hugging face repo at {self.hf_repo_id}")
+                with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
+                    self.logger.info(f"Created hugging face repo at {self.hf_repo_id}")
                 
                 self.hf_repo_exists = True 
                 
@@ -553,20 +605,25 @@ class Trainer:
     def _clr_mem(self, gc_ = False, cuda_clr_cache = True, *args, **kwargs):
         
         if gc_:
-            self.logger.info('Collecting garbage.')
+            with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
+                self.logger.info('Collecting garbage.')
             gc.collect() 
         if cuda_clr_cache:
-            self.logger.info('Clearing cuda cache.')
+            with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
+                self.logger.info('Clearing cuda cache.')
             torch.cuda.empty_cache()
         for i in args:
-            self.logger.info(f'Deleting {i}')
+            with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
+                self.logger.info(f'Deleting {i}')
             del i
         for key in kwargs:
-            logger.info(f'Deleting {key}')
+            with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
+                self.logger.info(f'Deleting {key}')
             del kwargs[key] 
             
     def _get_val_dataloader(self):
-        self.logger.info('Loading validation data.') 
+        with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
+            self.logger.info('Loading validation data.') 
         X_val, y_val = get_data(self.val_data_root_path)
         
         val_dataloader = get_dataloader(
@@ -584,23 +641,27 @@ class Trainer:
     
     def _init_wandb(self):
         if self.wandb_:
-            self.logger.info(f'Initializing wandb | Project: {self.wandb_config.project} | Run: {self.wandb_config.name}_RUN_{self.run_id}')
+            with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
+                self.logger.info(f'Initializing wandb | Project: {self.wandb_config.project} | Run: {self.wandb_config.name}_RUN_{self.run_id}')
             assert isinstance(self.wandb_config, WandbConfig), ValueError('wandb_config must be type WandbConfig')
             self.wandb_config.name = self.wandb_config.name + "_RUN_" + self.run_id 
 
             wandb.init(
                 **asdict(self.wandb_config)
             ) 
-            self.logger.info('Initialized wandb')
+            with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
+                self.logger.info('Initialized wandb')
 
     def _compile_warmup(self):
         if self._compile:
-            self.logger.info('Running compile warmup')
+            with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
+                self.logger.info('Running compile warmup')
             x = torch.randint(low = 0, high = self.vocab_size, size = (self.batch_size, self.context_length))
             for _ in tqdm(range(self._compile_warmup_steps), desc = 'Compile warmup.', total = self._compile_warmup_steps):
                 self.model(x)
             self._clr_mem(gc_= True, cuda_clr_cache=True, x = x) 
-            self.logger.info('Finished running compile warmup') 
+            with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
+                self.logger.info('Finished running compile warmup') 
 
     def _get_mixed_precision_dtype(self):
         if self.mixed_precision.lower() == "bf16":
@@ -624,30 +685,33 @@ class Trainer:
         else:
             raise ValueError(f"Invalid log level: {self.log_level}")
 
-    def setup_logger(self, log_level="INFO", log_root_path=None, return_date_time = False):
-
+    def setup_logger(self, log_level="INFO", log_root_path=None, return_date_time=False):
         self.logger.handlers = []
         self.logger.setLevel(log_level)
-        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-        
-        console_handler = logging.StreamHandler()
+
+        console_handler = RichHandler(show_time=True, show_level=True, show_path=False)
+        formatter = logging.Formatter("%(message)s", datefmt="[%X]")
         console_handler.setFormatter(formatter)
         self.logger.addHandler(console_handler)
+
         date_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
         if log_root_path and dist.is_initialized() and dist.get_rank() == 0:
             os.makedirs(log_root_path, exist_ok=True)
             file_handler = logging.FileHandler(os.path.join(log_root_path, f"run_{date_time}.log"))
-            file_handler.setFormatter(formatter)
+            file_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            file_handler.setFormatter(file_formatter)
             self.logger.addHandler(file_handler)
-        
+
         if return_date_time:
             return date_time
 
 def get_scheduler(optimizer, warmup_steps, constant_steps, decay_steps, max_lr, min_lr, *args, **kwargs):
    
     if not min_lr <= optimizer.param_groups[0]['initial_lr'] <= max_lr:
-        self.logger.warning(f"min_lr {min_lr} is not between optimizer's initial_lr "
+        
+        with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
+            self.logger.warning(f"min_lr {min_lr} is not between optimizer's initial_lr "
                      f"{optimizer.param_groups[0]['initial_lr']} and max_lr {max_lr}")
     
     cycle_length = warmup_steps + constant_steps + decay_steps
@@ -670,12 +734,33 @@ def get_scheduler(optimizer, warmup_steps, constant_steps, decay_steps, max_lr, 
     return LambdaLR(optimizer, lr_lambda)
 
 @contextmanager
-def supress_logging(logger):
+def supress_logging(logger, disable=None, disable_exclude=None):
+    
+    if disable is None and disable_exclude is None:
+        raise ValueError('Either disable or disable_exclude must be provided')
+
+    if disable is not None and disable_exclude is not None:
+        raise ValueError('Only one of disable or disable_exclude can be provided')
+
+    rank = dist.get_rank() if dist.is_initialized() else 0
+    suppress = False
+
+    if disable is True:
+        suppress = True
+    elif isinstance(disable, int):
+        suppress = (rank == disable)
+    elif isinstance(disable_exclude, int):
+        suppress = (rank != disable_exclude)
+
     stream_handlers = [h for h in logger.handlers if isinstance(h, logging.StreamHandler)]
-    for h in stream_handlers:
-        logger.removeHandler(h)
-    try:
-        yield
-    finally:
+
+    if suppress:
         for h in stream_handlers:
-            logger.addHandler(h)    
+            logger.removeHandler(h)
+        try:
+            yield
+        finally:
+            for h in stream_handlers:
+                logger.addHandler(h)
+    else:
+        yield

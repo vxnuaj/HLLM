@@ -18,6 +18,8 @@
     "log_level": "INFO",
     "_compile": true,
     "_compile_warmup_steps": 10,
+    "disable": 1,
+    "disable_exclude": null,
     "hf_repo_config": {
         "hf_repo_exists": true,
         "hf_repo_id": "tiny-research/prometheus",

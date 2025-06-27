@@ -3,7 +3,7 @@ import torch
 import json
 
 from dataclasses import dataclass, field
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Union
 
 @dataclass
 class TrainingConfig:
@@ -26,8 +26,10 @@ class TrainingConfig:
     _compile: bool
     _compile_warmup_steps: int
     hf_repo_config: Dict[str, Any] = field(default_factory=dict)
-    extra_args: Dict[str, Any] = field(default_factory=dict)
     mixed_precision_dtype: torch.dtype = torch.float16
+    disable: Union[Optional[bool], Optional[int]] = None
+    disable_exclude: Union[Optional[bool], Optional[int]] = None
+    extra_args: Dict[str, Any] = field(default_factory=dict)
 
     def __init__(self, **kwargs):
         fields = TrainingConfig.__dataclass_fields__
