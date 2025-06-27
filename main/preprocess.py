@@ -32,7 +32,7 @@ file_val = [file_val]
 # PARAMS -----------------
 
 return_single_str = False
-vocab_size = 5_000
+vocab_size = 4_906 #
 special_tokens = {'pad': '<|pad|>','bos': '<|bos|>', 'eos': '<|eos|>', } # toks (0, 1) respectively
 save_tokenizer_path = 'data/tokenizer.json'
 context_len = 512
