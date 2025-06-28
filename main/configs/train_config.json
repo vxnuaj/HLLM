@@ -16,6 +16,7 @@
     "fsdp_wrap_policy": "transformer",
     "wandb": true,
     "log_level": "INFO",
+    "log_root_path": "main/logs",
     "_compile": true,
     "_compile_warmup_steps": 10,
     "disable": 1,

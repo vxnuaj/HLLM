@@ -1,25 +1,3 @@
-'''
-
-TODO
-
-- [X] Verify the training loop works.
-    - [X] Add ability to save to hugging face during each checkpoint.
-        - [X] Saving under assumption that hugging face repo is created
-        - [X] Saving under assumption that the hugging face repo is not created.
-        - [X] log in to hf???
-- [X] Add logging when needed.
-    - [X] Setup logging to print on terminal ( when needed of course )
-        - [X] Log output onto terminal should be disabled when the training loop begins, but should still save to logging file.
-        - [X] make sure output only happens once and isn't duplicated ( multiple ranks ) 
-    - [X] Setup logging to save to file ( when needed of course )
-    - [X] Is everything set such that things are not duplicated amongst ranks when not neccessary?
-
-- [X] Need to fix uploading to hf - directory should already be strucutred locally, 
-        all we should do is upload the entire payload to a dir in hf
-- [ ] add login functionality to hugging face and wandb
-
-'''
-
 import torch
 import torch.nn as nn
 import torch.optim as opt
@@ -336,7 +314,12 @@ class Trainer:
                     self.model.train()
 
         self._cleanup()
-   
+        self.cleanup()
+
+    def cleanup(self):
+        if hasattr(self, 'tee_handler') and self.tee_handler is not None:
+            self.tee_handler.close()
+
     def _clip_grad_norm(self):
         if self.max_grad_norm: 
             nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
@@ -378,7 +361,7 @@ class Trainer:
         dist.destroy_process_group()
         
     def _get_device(self):
-        device = torch.device(f"cuda:{int(os.environ['LOCAL_RANK'])}") if torch.cuda.is_available() else 'cpu'
+        device = torch.device(f"cuda:{int(os.environ['LOCAL_RANK'])}") if torch.cuda.is_available() else torch.device('cpu')
         return device
         
     def _check_dataloader_sampler(self):
@@ -654,13 +637,19 @@ class Trainer:
 
     def _compile_warmup(self):
         if self._compile:
-            with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
+            with supress_logging(
+                logger = self.logger, 
+                disable = self.disable, 
+                disable_exclude = self.disable_exclude): 
                 self.logger.info('Running compile warmup')
             x = torch.randint(low = 0, high = self.vocab_size, size = (self.batch_size, self.context_length))
             for _ in tqdm(range(self._compile_warmup_steps), desc = 'Compile warmup.', total = self._compile_warmup_steps):
                 self.model(x)
             self._clr_mem(gc_= True, cuda_clr_cache=True, x = x) 
-            with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
+            with supress_logging(
+                logger = self.logger, 
+                disable = self.disable, 
+                disable_exclude = self.disable_exclude): 
                 self.logger.info('Finished running compile warmup') 
 
     def _get_mixed_precision_dtype(self):
@@ -686,6 +675,30 @@ class Trainer:
             raise ValueError(f"Invalid log level: {self.log_level}")
 
     def setup_logger(self, log_level="INFO", log_root_path=None, return_date_time=False):
+        import sys
+        from io import StringIO
+
+        class TeeHandler:
+            def __init__(self, filename):
+                self.file = open(filename, 'a')
+                self.stdout = sys.stdout
+                sys.stdout = self
+                sys.stderr = self 
+
+            def write(self, data):
+                self.file.write(data)
+                self.file.flush()
+                self.stdout.write(data)
+                
+            def flush(self):
+                self.file.flush()
+                self.stdout.flush()
+                
+            def close(self):
+                sys.stdout = self.stdout
+                sys.stderr = sys.__stderr__ 
+                self.file.close()
+
         self.logger.handlers = []
         self.logger.setLevel(log_level)
 
@@ -695,13 +708,18 @@ class Trainer:
         self.logger.addHandler(console_handler)
 
         date_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        self.tee_handler = None
 
-        if log_root_path and dist.is_initialized() and dist.get_rank() == 0:
+        if log_root_path and dist.is_initialized():
             os.makedirs(log_root_path, exist_ok=True)
-            file_handler = logging.FileHandler(os.path.join(log_root_path, f"run_{date_time}.log"))
+            log_file = os.path.join(log_root_path, f"run_{date_time}.log")
+        
+            file_handler = logging.FileHandler(log_file)
             file_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
             file_handler.setFormatter(file_formatter)
             self.logger.addHandler(file_handler)
+            
+            self.tee_handler = TeeHandler(log_file)
 
         if return_date_time:
             return date_time

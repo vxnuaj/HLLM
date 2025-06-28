@@ -23,6 +23,7 @@ class TrainingConfig:
     fsdp_wrap_policy: str
     wandb: bool
     log_level: str
+    log_root_path: Optional[str] = None
     _compile: bool
     _compile_warmup_steps: int
     hf_repo_config: Dict[str, Any] = field(default_factory=dict)

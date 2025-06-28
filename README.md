@@ -57,11 +57,10 @@ This repository contains code for building, profiling, and training a variant of
   - [X] wandb_config.json
   - [X] Make HF Repo for the dataset and add the upload script for the dataset and the tokenizer.
 
-- [ ] Test Pipeline | on GPU.
+- [X] Test Pipeline | on GPU.
   - [X] Tokenizer a small set of samples.
     -[X] Verify that we'll be using the 0th index for ignore_index in the loss.
   - [X] turn logger to logging on a single dist | or at option for it on parameters.
-  - [ ] Figure out that we're properly using the os.envion['LOCAL_RANK'] vs dist.get_rank() in the proper places.
   - [ ] Verify that the model is training.
     - [ ] DDP
       - [ ] There's a hang, wtf do I do.
