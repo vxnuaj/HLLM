@@ -371,70 +371,72 @@ class Trainer:
                                  the dataloader must DistributedSampler')
             
     def _get_model(self, model_config):
-        
-        with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
+        with supress_logging(logger=self.logger, disable=self.disable, disable_exclude=self.disable_exclude):
             self.logger.info("Initializing Model")
         model = LLaMA(**model_config)
+
         if self._compile:
-            with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
+            with supress_logging(logger=self.logger, disable=self.disable, disable_exclude=self.disable_exclude):
                 self.logger.info("Compiling Model")
             model = torch.compile(model)
-        
-        local_rank = int(os.environ.get('LOCAL_RANK'))
-        if self.parallel_type in ['ddp']:
-            with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
-                self.logger.info("Wrapping model with DDP")
-            model = DDP(model.to(self.device), device_ids = [local_rank])
-            with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
-                self.logger.info("Successfully wrapped model in DDP") 
-            return model
-        elif self.parallel_type in ['fsdp']:
-            with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
-                self.logger.info("Wrapping model with FSDP")
-            if self.fsdp_wrap_policy == 'transformer':
-                with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
-                    self.logger.info(f"Initiatlizing FSDP with {self.fsdp_wrap_policy} policy") 
-                auto_wrap_policy = functools.partial(
-                    transformer_auto_wrap_policy, 
-                    transformer_layer_cls = {
-                        TransformerBlock, 
-                        }
-                    )
-                model = FSDP(model.to(self.device), device_id = [local_rank], auto_wrap_policy = auto_wrap_policy)
-                with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
-                    self.logger.info("Successfully wrapped model in FSDP") 
-                return model
-            elif self.fsdp_wrap_policy == 'auto' or self.fsdp_wrap_policy == None or self.fsdp_wrap_policy == 'none':
-                with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
-                    self.logger.info(f"Initiatlizing FSDP with auto policy") 
-                model = FSDP(model.to(self.device), device_id = [local_rank])
-                with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
-                    self.logger.info("Successfully wrapped model in FSDP") 
-                return model
-            else:
-                raise ValueError(f"Invalid fsdp_wrap_policy: {self.fsdp_wrap_policy}")
-        else:
-            with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
-                self.logger.info("Not using parallelism")
-            return model.to(self.device)            
-            
-    def _get_avg_rank_loss_pplx(self, loss, pplx):
+
+        local_rank = int(os.environ.get('LOCAL_RANK', 0))
+        torch.cuda.set_device(local_rank)
+        self.device = torch.device(f"cuda:{local_rank}")
+
         if self.parallel_type == 'ddp':
-            loss_tensor = loss.detach().clone()
-            dist.all_reduce(loss_tensor, op = ReduceOp.SUM)
-            dist.all_reduce(pplx, op = ReduceOp.SUM)
-            loss_avg = loss_tensor / dist.get_world_size() 
-            pplx_avg = pplx / dist.get_world_size()
-            return loss_avg, pplx_avg
+            with supress_logging(logger=self.logger, disable=self.disable, disable_exclude=self.disable_exclude):
+                self.logger.info("Wrapping model with DDP")
+            model = model.cuda(local_rank)
+            model = DDP(model, device_ids=[local_rank], output_device=local_rank)
+            with supress_logging(logger=self.logger, disable=self.disable, disable_exclude=self.disable_exclude):
+                self.logger.info("Successfully wrapped model in DDP")
+            return model
+
         elif self.parallel_type == 'fsdp':
-            dist.all_reduce(loss, op=ReduceOp.SUM)
-            dist.all_reduce(pplx, op=ReduceOp.SUM)
-            loss_avg = loss / dist.get_world_size()
-            pplx_avg = pplx / dist.get_world_size()
-            return loss_avg, pplx_avg
+            with supress_logging(logger=self.logger, disable=self.disable, disable_exclude=self.disable_exclude):
+                self.logger.info("Wrapping model with FSDP")
+            model = model.cuda(local_rank)
+
+            if self.fsdp_wrap_policy == 'transformer':
+                with supress_logging(logger=self.logger, disable=self.disable, disable_exclude=self.disable_exclude):
+                    self.logger.info(f"Initializing FSDP with transformer policy")
+                auto_wrap = functools.partial(
+                    transformer_auto_wrap_policy,
+                    transformer_layer_cls={TransformerBlock,},
+                )
+                model = FSDP(model, device_id=local_rank, auto_wrap_policy=auto_wrap)
+            else:
+                with supress_logging(logger=self.logger, disable=self.disable, disable_exclude=self.disable_exclude):
+                    self.logger.info(f"Initializing FSDP with auto policy")
+                model = FSDP(model, device_id=local_rank)
+
+            with supress_logging(logger=self.logger, disable=self.disable, disable_exclude=self.disable_exclude):
+                self.logger.info("Successfully wrapped model in FSDP")
+            return model
+
+        else:
+            with supress_logging(logger=self.logger, disable=self.disable, disable_exclude=self.disable_exclude):
+                self.logger.info("Not using parallelism")
+            return model.cuda(local_rank)
+            
+        def _get_avg_rank_loss_pplx(self, loss, pplx):
+            if self.parallel_type == 'ddp':
+                loss_tensor = loss.detach().clone()
+                dist.all_reduce(loss_tensor, op = ReduceOp.SUM)
+                dist.all_reduce(pplx, op = ReduceOp.SUM)
+                loss_avg = loss_tensor / dist.get_world_size() 
+                pplx_avg = pplx / dist.get_world_size()
+                return loss_avg, pplx_avg
+            elif self.parallel_type == 'fsdp':
+                dist.all_reduce(loss, op=ReduceOp.SUM)
+                dist.all_reduce(pplx, op=ReduceOp.SUM)
+                loss_avg = loss / dist.get_world_size()
+                pplx_avg = pplx / dist.get_world_size()
+                return loss_avg, pplx_avg
         
     def _get_model_state_dict(self):
-       
+        
         with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
             self.logger.info('Getting model state dict')    
         if self.parallel_type == 'ddp':
@@ -603,7 +605,7 @@ class Trainer:
             with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
                 self.logger.info(f'Deleting {key}')
             del kwargs[key] 
-            
+           
     def _get_val_dataloader(self):
         with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
             self.logger.info('Loading validation data.') 

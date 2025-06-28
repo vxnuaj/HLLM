@@ -23,7 +23,6 @@ class TrainingConfig:
     fsdp_wrap_policy: str
     wandb: bool
     log_level: str
-    log_root_path: Optional[str] = None
     _compile: bool
     _compile_warmup_steps: int
     hf_repo_config: Dict[str, Any] = field(default_factory=dict)
@@ -31,6 +30,7 @@ class TrainingConfig:
     disable: Union[Optional[bool], Optional[int]] = None
     disable_exclude: Union[Optional[bool], Optional[int]] = None
     extra_args: Dict[str, Any] = field(default_factory=dict)
+    log_root_path: Optional[str] = None
 
     def __init__(self, **kwargs):
         fields = TrainingConfig.__dataclass_fields__
