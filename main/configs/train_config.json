@@ -17,14 +17,14 @@
     "wandb": true,
     "log_level": "INFO",
     "log_root_path": "main/logs",
-    "_compile": true,
-    "_compile_warmup_steps": 10,
+    "_compile": false,
+    "_compile_warmup_steps": null,
     "disable": 1,
     "disable_exclude": null,
     "hf_repo_config": {
         "hf_repo_exists": true,
-        "hf_repo_id": "tiny-research/prometheus",
+        "hf_repo_id": "tiny-research/athena",
         "hf_repo_type": "model",
-        "hf_root_path": "PROMETHEUS_V1_TINY_39.7M/checkpoints"
+        "hf_root_path": "ATHENA_V1_TINY_39.7M/checkpoints"
     }
 }

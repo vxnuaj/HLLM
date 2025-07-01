@@ -9,3 +9,5 @@ pyarrow
 dotenv
 rich
 tee-logger
+pyfiglet
+termcolor

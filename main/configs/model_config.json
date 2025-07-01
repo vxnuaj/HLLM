@@ -17,5 +17,6 @@
     "flash_attn": true,
     "flash_attn_dtype": "float16",
     "supress_warnings": true,
-    "model_name": "PROMETHEUS_V1_TINY_39.7M"
+    "model_name": "ATHENA_V1_TINY_39.7M", 
+    "model_series_name": "ATHENA"
 }

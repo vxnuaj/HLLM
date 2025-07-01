@@ -87,10 +87,6 @@ class WandbConfig:
     entity:str
     tags:list
     notes:str
-    sweep_id:str
-    sweep_config:str
-    sweep_name:str
-    sweep_entity:str
     extra_args: dict = field(default_factory = dict)
 
     def __init__(self, **kwargs):
@@ -121,6 +117,7 @@ class ModelConfig:
     supress_warnings:bool
     verbose:bool
     model_name:str
+    model_series_name:str
     extra_args: dict = field(default_factory = dict)
 
     def __init__(self, **kwargs):

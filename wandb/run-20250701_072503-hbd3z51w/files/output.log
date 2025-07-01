@@ -1,0 +1,30 @@
+2025-07-01 07:25:04,658 - INFO - [Rank 1] Initialized wandb at local_rank 1
+Successfully loaded data as tensors
+Loading dataset
+Loading Distributed Sampler for ddp
+Traceback (most recent call last):
+  File "/workspace/HLLM/main/train.py", line 29, in <module>
+    trainer.train()
+  File "/workspace/HLLM/main/train_utils.py", line 234, in train
+    loss.backward()
+  File "/usr/local/lib/python3.11/dist-packages/torch/_tensor.py", line 648, in backward
+    torch.autograd.backward(
+  File "/usr/local/lib/python3.11/dist-packages/torch/autograd/__init__.py", line 346, in backward
+    grad_tensors_ = _make_grads(tensors, grad_tensors_, is_grads_batched=False)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/dist-packages/torch/autograd/__init__.py", line 199, in _make_grads
+    raise RuntimeError(
+RuntimeError: grad can be implicitly created only for scalar outputs
+[rank1]: Traceback (most recent call last):
+[rank1]:   File "/workspace/HLLM/main/train.py", line 29, in <module>
+[rank1]:     trainer.train()
+[rank1]:   File "/workspace/HLLM/main/train_utils.py", line 234, in train
+[rank1]:     loss.backward()
+[rank1]:   File "/usr/local/lib/python3.11/dist-packages/torch/_tensor.py", line 648, in backward
+[rank1]:     torch.autograd.backward(
+[rank1]:   File "/usr/local/lib/python3.11/dist-packages/torch/autograd/__init__.py", line 346, in backward
+[rank1]:     grad_tensors_ = _make_grads(tensors, grad_tensors_, is_grads_batched=False)
+[rank1]:                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/usr/local/lib/python3.11/dist-packages/torch/autograd/__init__.py", line 199, in _make_grads
+[rank1]:     raise RuntimeError(
+[rank1]: RuntimeError: grad can be implicitly created only for scalar outputs

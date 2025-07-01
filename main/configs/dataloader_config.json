@@ -4,7 +4,7 @@
         "train_num_workers": 12,
         "train_shuffle": true,
         "train_pin_memory": true,
-        "train_data_root_path": "data/train"
+        "train_data_root_path": "data/tensors/train"
     },
 
     "val_dataloader_config": {
@@ -12,7 +12,7 @@
         "val_num_workers": 12,
         "val_shuffle": false,
         "val_pin_memory": true,
-        "val_data_root_path": "data/val"
+        "val_data_root_path": "data/tensors/val"
     }   
    
 }

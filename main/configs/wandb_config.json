@@ -1,11 +1,7 @@
 {
-    "project": "PROMETHEUS",
-    "name": "PROMETHEUS_V1_TINY_39.7M",
-    "entity": "PROMETHEUS",
-    "tags": ["PROMETHEUS", "39.7M", "PRETRAIN", "TINY", "V1"],
-    "notes": "",
-    "sweep_id": null,
-    "sweep_config": null,
-    "sweep_name": null,
-    "sweep_entity": null
+    "project": "ATHENA",
+    "name": "ATHENA_V1_TINY_39.7M",
+    "entity": "vxnuaj",
+    "tags": ["ATHENA", "39.7M", "PRETRAIN", "TINY", "V1"],
+    "notes": ""
 }

@@ -1,0 +1,50 @@
+{
+  "os": "Linux-6.5.0-28-generic-x86_64-with-glibc2.35",
+  "python": "CPython 3.11.11",
+  "startedAt": "2025-07-01T07:20:34.666429Z",
+  "program": "/workspace/HLLM/main/train.py",
+  "codePath": "main/train.py",
+  "git": {
+    "remote": "https://github.com/vxnuaj/HLLM.git",
+    "commit": "b88d4297bec6fa7b583e4ce15a922ff00cffae4b"
+  },
+  "email": "jv.100420@gmail.com",
+  "root": "/workspace/HLLM",
+  "host": "359db3b4ee5b",
+  "executable": "/usr/bin/python",
+  "codePathLocal": "main/train.py",
+  "cpu_count": 128,
+  "cpu_count_logical": 255,
+  "gpu": "NVIDIA A100-SXM4-80GB",
+  "gpu_count": 2,
+  "disk": {
+    "/": {
+      "total": "32212254720",
+      "used": "2287652864"
+    }
+  },
+  "memory": {
+    "total": "1081976471552"
+  },
+  "cpu": {
+    "count": 128,
+    "countLogical": 255
+  },
+  "gpu_nvidia": [
+    {
+      "name": "NVIDIA A100-SXM4-80GB",
+      "memoryTotal": "85899345920",
+      "cudaCores": 6912,
+      "architecture": "Ampere",
+      "uuid": "GPU-2eb62d7f-a6fb-424f-ec03-fd5d1c362b4a"
+    },
+    {
+      "name": "NVIDIA A100-SXM4-80GB",
+      "memoryTotal": "85899345920",
+      "cudaCores": 6912,
+      "architecture": "Ampere",
+      "uuid": "GPU-49a97b98-f9cf-27fe-3c96-553b35c59d23"
+    }
+  ],
+  "cudaVersion": "12.8"
+}

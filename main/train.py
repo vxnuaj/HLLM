@@ -4,6 +4,7 @@ import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'model')))
 
 from train_utils import Trainer
+from config import get_config
 
 root_path = 'main/configs'
 

@@ -1,0 +1,17 @@
+{"time":"2025-07-01T07:05:36.206799999Z","level":"INFO","msg":"stream: starting","core version":"0.20.1","symlink path":"/workspace/HLLM/wandb/run-20250701_070535-du33rxo0/logs/debug-core.log"}
+{"time":"2025-07-01T07:05:36.609788015Z","level":"INFO","msg":"stream: created new stream","id":"du33rxo0"}
+{"time":"2025-07-01T07:05:36.61053839Z","level":"INFO","msg":"stream: started","id":"du33rxo0"}
+{"time":"2025-07-01T07:05:36.610585602Z","level":"INFO","msg":"writer: Do: started","stream_id":"du33rxo0"}
+{"time":"2025-07-01T07:05:36.610632955Z","level":"INFO","msg":"sender: started","stream_id":"du33rxo0"}
+{"time":"2025-07-01T07:05:36.610658936Z","level":"INFO","msg":"handler: started","stream_id":"du33rxo0"}
+{"time":"2025-07-01T07:05:36.777242467Z","level":"ERROR","msg":"HTTP error","status":403,"method":"POST","url":"https://api.wandb.ai/graphql"}
+{"time":"2025-07-01T07:05:36.778042987Z","level":"ERROR","msg":"runupserter: failed to init run","error":"returned error 403: {\"data\":{\"upsertBucket\":null},\"errors\":[{\"message\":\"permission denied\",\"path\":[\"upsertBucket\"],\"extensions\":{\"code\":\"PERMISSION_ERROR\"}}]}"}
+{"time":"2025-07-01T07:05:37.781409188Z","level":"INFO","msg":"stream: closing","id":"du33rxo0"}
+{"time":"2025-07-01T07:05:37.786280478Z","level":"ERROR","msg":"sender: uploadConfigFile: stream: no run"}
+{"time":"2025-07-01T07:05:37.983168628Z","level":"ERROR","msg":"HTTP error","status":404,"method":"POST","url":"https://api.wandb.ai/graphql"}
+{"time":"2025-07-01T07:05:37.983755295Z","level":"ERROR","msg":"runfiles: CreateRunFiles returned error: returned error 404: {\"data\":{\"createRunFiles\":null},\"errors\":[{\"message\":\"project athena/ATHENA not found during createRunFiles\",\"path\":[\"createRunFiles\"]}]}"}
+{"time":"2025-07-01T07:05:37.986426584Z","level":"INFO","msg":"fileTransfer: Close: file transfer manager closed"}
+{"time":"2025-07-01T07:05:37.986792273Z","level":"INFO","msg":"handler: closed","stream_id":"du33rxo0"}
+{"time":"2025-07-01T07:05:37.986831524Z","level":"INFO","msg":"writer: Close: closed","stream_id":"du33rxo0"}
+{"time":"2025-07-01T07:05:37.986906743Z","level":"INFO","msg":"sender: closed","stream_id":"du33rxo0"}
+{"time":"2025-07-01T07:05:37.989280857Z","level":"INFO","msg":"stream: closed","id":"du33rxo0"}

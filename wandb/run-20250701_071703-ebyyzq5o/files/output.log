@@ -1,0 +1,21 @@
+2025-07-01 07:17:04,917 - INFO - [Rank 0] Initialized wandb at local_rank 0
+Traceback (most recent call last):
+  File "/workspace/HLLM/main/train.py", line 29, in <module>
+    trainer.train()
+  File "/workspace/HLLM/main/train_utils.py", line 188, in train
+    X, y = get_data(self.train_data_root_path)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/HLLM/main/dataloader.py", line 51, in get_data
+    X_pths = sorted([os.path.join(X_dir, f) for f in os.listdir(X_dir)])
+                                                     ^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: 'data/train/X'
+[rank0]: Traceback (most recent call last):
+[rank0]:   File "/workspace/HLLM/main/train.py", line 29, in <module>
+[rank0]:     trainer.train()
+[rank0]:   File "/workspace/HLLM/main/train_utils.py", line 188, in train
+[rank0]:     X, y = get_data(self.train_data_root_path)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/workspace/HLLM/main/dataloader.py", line 51, in get_data
+[rank0]:     X_pths = sorted([os.path.join(X_dir, f) for f in os.listdir(X_dir)])
+[rank0]:                                                      ^^^^^^^^^^^^^^^^^
+[rank0]: FileNotFoundError: [Errno 2] No such file or directory: 'data/train/X'

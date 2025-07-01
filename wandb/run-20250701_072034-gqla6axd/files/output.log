@@ -1,0 +1,16 @@
+2025-07-01 07:20:35,623 - INFO - [Rank 1] Initialized wandb at local_rank 1
+Successfully loaded data as tensors
+Traceback (most recent call last):
+  File "/workspace/HLLM/main/train.py", line 29, in <module>
+    trainer.train()
+  File "/workspace/HLLM/main/train_utils.py", line 190, in train
+    self.dataloader = get_dataloader(X, y, parallel_type = self.parallel_type,
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: get_dataloader() missing 2 required positional arguments: 'batch_size' and 'num_workers'
+[rank1]: Traceback (most recent call last):
+[rank1]:   File "/workspace/HLLM/main/train.py", line 29, in <module>
+[rank1]:     trainer.train()
+[rank1]:   File "/workspace/HLLM/main/train_utils.py", line 190, in train
+[rank1]:     self.dataloader = get_dataloader(X, y, parallel_type = self.parallel_type,
+[rank1]:                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]: TypeError: get_dataloader() missing 2 required positional arguments: 'batch_size' and 'num_workers'

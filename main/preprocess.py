@@ -26,7 +26,7 @@ file_3 = 'data/train3.parquet'
 file_4 = 'data/train4.parquet'
 file_val = 'data/validation.parquet'
 
-file_train = [file_1]
+file_train = [file_1, file_2, file_3, file_4]
 file_val = [file_val]
 
 # PARAMS -----------------
@@ -145,8 +145,6 @@ if __name__ == "__main__":
     torch.save(Y_val_subset, os.path.join(y_val_pth, 'Y_val.pt'))
    
     total_token_count = train_token_count + val_token_count
-  
-    '''
     
     # --- upload to hugging face ---
 
@@ -158,6 +156,8 @@ if __name__ == "__main__":
         exist_ok=True
     )
 
+    print("Uploading Tokenizer.") 
+     
     api.upload_file( # the tokenizer
         path_or_fileobj=save_tokenizer_path,
         repo_id='tiny-research/TinyStories',
@@ -165,7 +165,7 @@ if __name__ == "__main__":
         repo_type = 'dataset'
     )  
 
-    # --- training files ---
+    print('Uploading Training Files.')
 
     api.upload_folder(
         folder_path=X_train_pth,
@@ -181,7 +181,7 @@ if __name__ == "__main__":
         repo_type = "dataset"        
     )
 
-    # --- validation files ---
+    print('Uploading Validation Files.')
 
     api.upload_folder(
         folder_path=X_val_pth,
@@ -196,4 +196,3 @@ if __name__ == "__main__":
         path_in_repo=f'CONTEXT_LEN_{context_len}_TOKENS_{total_token_count}/VAL_TOKENS_{val_token_count}/',
         repo_type = "dataset"        
     )
-    '''
