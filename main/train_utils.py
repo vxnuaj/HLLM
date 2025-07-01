@@ -82,7 +82,11 @@ class Trainer:
         self.mixed_precision = self.train_config.mixed_precision
         self.mixed_precision_dtype = self._get_mixed_precision_dtype(self.train_config.mixed_precision_dtype) if self.train_config.mixed_precision else None
         self.max_grad_norm = self.train_config.max_grad_norm
-        self.track_grad_norm = self.train_config.track_grad_norm
+        
+        track_grad_norm_state = self.train_config.track_grad_norm 
+        self.track_grad_norm = self.train_config.track_grad_norm if self.train_config.wandb else False
+        
+       
         self.parallel_type = self.train_config.parallel_type
         self.val_batch_size = self.val_dataloader_config['val_batch_size']
         self.val_num_workers = self.val_dataloader_config['val_num_workers']
@@ -106,17 +110,21 @@ class Trainer:
         self.logger = logging.getLogger(__name__)      
         date_time = self.setup_logger(log_level=self.log_level, log_root_path=self.log_root_path, return_date_time = True)
         self.run_start_date_time = date_time
+
+        if track_grad_norm_state != self.track_grad_norm:
+            self.logger.warning("Gradient norm tracking is disabled because wandb is not enabled")
         
         load_dotenv(dotenv_path = 'main/configs/.env') 
         
         self.hf_token = os.environ.get('HF_TOKEN')
         self.wandb_token = os.environ.get('WANDB_API_KEY')
-       
-        assert self.hf_token is not None and self.save_hf, ValueError(f'HF_TOKEN must be specified if save_hf is True to save model \
-                                                                      checkpoints to hugging face repo {self.hf_repo_id}')
-        assert self.wandb_token is not None and self.wandb_, ValueError(f'WANDB_TOKEN must be specified if wandb is True, \
-                                                            to log the training run to wandb project {self.wandb_config.project}')
       
+        if self.save_hf and self.hf_token is None:
+            raise ValueError(f'HF_TOKEN must be specified if save_hf is True to save model checkpoints to Hugging Face repo {self.hf_repo_id}')
+
+        if self.wandb_ and self.wandb_token is None:
+            raise ValueError(f'WANDB_TOKEN must be specified if wandb is True, to log the training run to wandb project {self.wandb_config.project}')
+            
         fig = Figlet(font='larry3d')
         
         self.scaler = GradScaler() if self.mixed_precision else None
@@ -179,12 +187,16 @@ class Trainer:
         self.train_data_root_path = self.train_dataloader_config['train_data_root_path']
  
     def train(self):
-        self._compile_warmup() 
-        self._init_wandb() 
-        self._check_device_warn()
-        global_steps = 0 
         rank = dist.get_rank() 
         is_main_rank = rank == 0 
+        
+        self._compile_warmup() 
+       
+        if is_main_rank:
+            self._init_wandb() 
+            
+        self._check_device_warn()
+        global_steps = 0 
         X, y = get_data(self.train_data_root_path)
         
         self.dataloader = get_dataloader(
@@ -199,11 +211,12 @@ class Trainer:
             )
         
         self._check_dataloader_sampler()      
+        self.logger.info(f"[Rank {self._get_local_rank()}] Training for {len(self.dataloader)} batches per epoch.")
        
         with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude):
-            for epoch in range(self.epochs):
-                progress_bar = tqdm(enumerate(self.dataloader), desc="Training", total=len(self.dataloader), 
+            progress_bar = tqdm(enumerate(self.dataloader), desc="Training", total=len(self.dataloader), 
                                     disable = (dist.get_rank()!=0 and self.parallel_type in ['fsdp', 'ddp']))
+            for epoch in range(self.epochs):
                 for i, (X, y) in progress_bar:
                     X, y = X.to(self.device, non_blocking = True), y.to(self.device, non_blocking = True)
                 if self.mixed_precision:
@@ -212,9 +225,8 @@ class Trainer:
                             start_time = time.perf_counter()
                         logits = self.model(X)
                         loss = self.criterion(logits.view(-1, logits.size(-1)), y.view(-1))
-                        pplx = torch.exp(loss)
-                    loss_avg, pplx_avg = self._get_avg_rank_loss_pplx(loss, pplx) 
-                    self.scaler.scale(loss).backward() 
+                    loss_avg, pplx_avg = self._get_avg_rank_loss_pplx(loss) 
+                    self.scaler.scale(loss_avg).backward() 
                     self.scaler.unscale_(self.optimizer)
                     if self.track_grad_norm:
                         grad_norm_dict = self._get_grad_norm()
@@ -229,9 +241,8 @@ class Trainer:
                         start_time = time.perf_counter()
                     logits = self.model(X) 
                     loss = self.criterion(logits.view(-1, logits.size(-1)), y.view(-1))
-                    pplx = torch.exp(loss)
-                    loss_avg, pplx_avg = self._get_avg_rank_loss_pplx(loss, pplx) 
-                    loss.backward()
+                    loss_avg, pplx_avg = self._get_avg_rank_loss_pplx(loss) 
+                    loss_avg.backward()
                     if is_main_rank:
                         end_time = time.perf_counter()
                     self._clip_grad_norm()
@@ -244,20 +255,20 @@ class Trainer:
                
                 if is_main_rank: 
                     progress_bar.set_description(desc = f"Epoch: {epoch + 1} | Local step: {i + 1} | \
-                                                 Global step: {global_steps + 1} | LR: {self.scheduler.get_last_lr()[0]} | Loss: {loss_avg.item()} \
-                                                 | pplx: {pplx_avg.item()} | Time: {end_time - start_time}") 
+                                                 Global step: {global_steps + 1} | LR: {self.scheduler.get_last_lr()[0]} | Loss: {loss_avg} \
+                                                 | pplx: {pplx_avg} | Time: {end_time - start_time}") 
                
                 if self.wandb_ and is_main_rank: 
                     wandb_dict = {
-                        "loss": loss_avg.item(),
-                        "perplexity": pplx_avg.item(),
+                        "loss": loss_avg,
+                        "perplexity": pplx_avg,
                     }
                     
                     if self.track_grad_norm:
                         wandb_dict.update(grad_norm_dict)
                         
                     wandb.log(wandb_dict)  
-                    
+                   
                 if global_steps % self.checkpoint_steps == 0:
                     dist.barrier() 
                     self._clr_mem(gc_ = True, cuda_clr_cache = True, X = X, y = y, logits = logits)
@@ -299,12 +310,12 @@ class Trainer:
                                 with autocast(device_type = 'cuda', dtype = self.val_mixed_precision_dtype):
                                     logits = self.model(X_val)
                                     loss = self.criterion(logits.view(-1, logits.size(-1)), y_val.view(-1))
-                                pplx = torch.exp(loss)
+                                pplx = torch.exp(loss.item())
                                 loss_avg, pplx_avg = self._get_avg_rank_loss_pplx(loss, pplx)
                             else:
                                 logits = self.model(X_val)
                                 loss = self.criterion(logits.view(-1, logits.size(-1)), y_val.view(-1))
-                                pplx = torch.exp(loss)
+                                pplx = torch.exp(loss.item())
                                 loss_avg, pplx_avg = self._get_avg_rank_loss_pplx(loss, pplx)
                             
                             loss_accum += loss_avg
@@ -316,10 +327,9 @@ class Trainer:
 
                     if self.wandb_:
                         wandb.log({
-                            "val loss": val_loss.item(),
-                            "val perplexity": val_pplx.item()
-                            }
-                        )
+                            "val loss": val_loss,
+                            "val perplexity": val_pplx
+                        })
                    
                     self._clr_mem(
                         gc_ = True, 
@@ -437,20 +447,19 @@ class Trainer:
             self.logger.info(f"[Rank {self._get_local_rank()}] Not using parallelism")
             return model.cuda(local_rank)
             
-    def _get_avg_rank_loss_pplx(self, loss, pplx):
+    def _get_avg_rank_loss_pplx(self, loss):
         if self.parallel_type == 'ddp':
-            loss_tensor = loss.detach().clone()
-            dist.all_reduce(loss_tensor, op = ReduceOp.SUM)
-            dist.all_reduce(pplx, op = ReduceOp.SUM)
-            loss_avg = loss_tensor / dist.get_world_size() 
-            pplx_avg = pplx / dist.get_world_size()
-            return loss_avg, pplx_avg
+            loss_avg_scalar = loss.mean() 
+            dist.all_reduce(loss_avg_scalar, op = ReduceOp.SUM) 
+            loss_avg_scalar = loss_avg_scalar / dist.get_world_size() 
+            pplx_avg = math.exp(loss_avg_scalar.item()) 
+            return loss_avg_scalar, pplx_avg
         elif self.parallel_type == 'fsdp':
-            dist.all_reduce(loss, op=ReduceOp.SUM)
-            dist.all_reduce(pplx, op=ReduceOp.SUM)
-            loss_avg = loss / dist.get_world_size()
-            pplx_avg = pplx / dist.get_world_size()
-            return loss_avg, pplx_avg
+            loss_avg_scalar = loss.mean() 
+            dist.all_reduce(loss_avg_scalar, op=ReduceOp.SUM)
+            loss_avg_scalar = loss_avg_scalar / dist.get_world_size()
+            pplx_avg = math.exp(loss_avg_scalar.item())
+            return loss_avg_scalar, pplx_avg
         
     def _get_model_state_dict(self):
        

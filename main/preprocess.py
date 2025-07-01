@@ -170,14 +170,14 @@ if __name__ == "__main__":
     api.upload_folder(
         folder_path=X_train_pth,
         repo_id='tiny-research/TinyStories',
-        path_in_repo=f'CONTEXT_LEN_{context_len}_TOKENS_{total_token_count}/TRAIN_TOKENS_{train_token_count}/',
+        path_in_repo=f'CONTEXT_LEN_{context_len}_TOKENS_{total_token_count}/TRAIN_TOKENS_{train_token_count}_TIME_{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}/',
         repo_type = "dataset"
     )
 
     api.upload_folder(
         folder_path = y_train_pth,
         repo_id='tiny-research/TinyStories',
-        path_in_repo=f'CONTEXT_LEN_{context_len}_TOKENS_{total_token_count}/TRAIN_TOKENS_{train_token_count}/',
+        path_in_repo=f'CONTEXT_LEN_{context_len}_TOKENS_{total_token_count}/TRAIN_TOKENS_{train_token_count}_TIME_{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}/',
         repo_type = "dataset"        
     )
 
@@ -186,13 +186,13 @@ if __name__ == "__main__":
     api.upload_folder(
         folder_path=X_val_pth,
         repo_id='tiny-research/TinyStories',
-        path_in_repo=f'CONTEXT_LEN_{context_len}_TOKENS_{total_token_count}/VAL_TOKENS_{val_token_count}/',
+        path_in_repo=f'CONTEXT_LEN_{context_len}_TOKENS_{total_token_count}/VAL_TOKENS_{val_token_count}_TIME_{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}/',
         repo_type = "dataset"        
     )
 
     api.upload_folder(
         folder_path=y_val_pth,
         repo_id='tiny-research/TinyStories',
-        path_in_repo=f'CONTEXT_LEN_{context_len}_TOKENS_{total_token_count}/VAL_TOKENS_{val_token_count}/',
+        path_in_repo=f'CONTEXT_LEN_{context_len}_TOKENS_{total_token_count}/VAL_TOKENS_{val_token_count}_TIME_{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}/',
         repo_type = "dataset"        
     )

@@ -1,13 +1,24 @@
 import torch
+from tqdm import tqdm
+import os
 
-X = torch.load('data/tensors/train/X/X_train_0.pt')
-y = torch.load('data/tensors/train/y/y_train_0.pt')
+print(f"Number of X tensors: {len(os.listdir('data/tensors/train/X'))}")
+print(f"Number of y tensors: {len(os.listdir('data/tensors/train/y'))}")
 
-num_samples = 10
+X_samples = 0
+y_samples = 0
 
-for sample in range(num_samples):
-    print(f"Sample {sample + 1}:")
-    print(f"X: {X[sample, 0:10]}")
-    print(f"y: {y[sample, 0:10]}")
-    print()
+for i in tqdm(range(len(os.listdir('data/tensors/train/X')))):
+    X = torch.load(f'data/tensors/train/X/X_train_{i}.pt')
+    y = torch.load(f'data/tensors/train/y/y_train_{i}.pt')
 
+
+    X_samples += X.shape[0]
+    y_samples += y.shape[0]
+
+    del X, y
+    
+assert X_samples == y_samples, ValueError("Number of X samples does not match number of y samples")
+
+print(X_samples)
+print(y_samples)
