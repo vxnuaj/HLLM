@@ -419,20 +419,20 @@ class Trainer:
                 self.logger.info("Not using parallelism")
             return model.cuda(local_rank)
             
-        def _get_avg_rank_loss_pplx(self, loss, pplx):
-            if self.parallel_type == 'ddp':
-                loss_tensor = loss.detach().clone()
-                dist.all_reduce(loss_tensor, op = ReduceOp.SUM)
-                dist.all_reduce(pplx, op = ReduceOp.SUM)
-                loss_avg = loss_tensor / dist.get_world_size() 
-                pplx_avg = pplx / dist.get_world_size()
-                return loss_avg, pplx_avg
-            elif self.parallel_type == 'fsdp':
-                dist.all_reduce(loss, op=ReduceOp.SUM)
-                dist.all_reduce(pplx, op=ReduceOp.SUM)
-                loss_avg = loss / dist.get_world_size()
-                pplx_avg = pplx / dist.get_world_size()
-                return loss_avg, pplx_avg
+    def _get_avg_rank_loss_pplx(self, loss, pplx):
+        if self.parallel_type == 'ddp':
+            loss_tensor = loss.detach().clone()
+            dist.all_reduce(loss_tensor, op = ReduceOp.SUM)
+            dist.all_reduce(pplx, op = ReduceOp.SUM)
+            loss_avg = loss_tensor / dist.get_world_size() 
+            pplx_avg = pplx / dist.get_world_size()
+            return loss_avg, pplx_avg
+        elif self.parallel_type == 'fsdp':
+            dist.all_reduce(loss, op=ReduceOp.SUM)
+            dist.all_reduce(pplx, op=ReduceOp.SUM)
+            loss_avg = loss / dist.get_world_size()
+            pplx_avg = pplx / dist.get_world_size()
+            return loss_avg, pplx_avg
         
     def _get_model_state_dict(self):
         
