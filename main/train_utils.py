@@ -13,6 +13,7 @@ import sys
 import functools
 import traceback
 import wandb
+import signal
 
 from dataclasses import asdict
 from dataloader import get_data
@@ -187,174 +188,200 @@ class Trainer:
         self.train_data_root_path = self.train_dataloader_config['train_data_root_path']
  
     def train(self):
-        rank = dist.get_rank() 
-        is_main_rank = rank == 0 
-        
-        self._compile_warmup() 
-       
-        if is_main_rank:
-            self._init_wandb() 
+        """Train the model"""
+        # Signal handler for graceful shutdown
+        def signal_handler(signum, frame):
+            self.logger.info("\nReceived interrupt signal. Cleaning up...")
+            self.cleanup()
+            self._cleanup()
+            sys.exit(0)
             
-        self._check_device_warn()
-        global_steps = 0 
-        X, y = get_data(self.train_data_root_path)
+        # Register the signal handler
+        signal.signal(signal.SIGINT, signal_handler)
         
-        self.dataloader = get_dataloader(
-            X, 
-            y, 
-            parallelism_type = self.parallel_type, 
-            rank = dist.get_rank(), 
-            batch_size=self.train_dataloader_config['train_batch_size'], 
-            num_workers=self.train_dataloader_config['train_num_workers'], 
-            shuffle=self.train_dataloader_config['train_shuffle'], 
-            pin_memory=self.train_dataloader_config['train_pin_memory']
-            )
-        
-        self._check_dataloader_sampler()      
-        self.logger.info(f"[Rank {self._get_local_rank()}] Training for {len(self.dataloader)} batches per epoch.")
-       
-        for epoch in range(self.epochs):
-            # Create progress bar for the current epoch
-            progress_bar = tqdm(
-                enumerate(self.dataloader),
-                desc=f"Epoch {epoch + 1}/{self.epochs} | Loss: - | PPLX: - | LR: -",
-                total=len(self.dataloader),
-                disable=(dist.get_rank()!=0 and self.parallel_type in ['fsdp', 'ddp']),
-                ascii = False
-            )
+        try:
+            rank = dist.get_rank() 
+            is_main_rank = rank == 0 
             
-            for i, (X, y) in progress_bar:
-                X, y = X.to(self.device, non_blocking=True), y.to(self.device, non_blocking=True)
+            self._compile_warmup() 
+           
+            if is_main_rank:
+                self._init_wandb() 
+            
+            self._check_device_warn()
+            global_steps = 0 
+            X, y = get_data(self.train_data_root_path)
+            
+            self.dataloader = get_dataloader(
+                X, 
+                y, 
+                parallelism_type = self.parallel_type, 
+                rank = dist.get_rank(), 
+                batch_size=self.train_dataloader_config['train_batch_size'], 
+                num_workers=self.train_dataloader_config['train_num_workers'], 
+                shuffle=self.train_dataloader_config['train_shuffle'], 
+                pin_memory=self.train_dataloader_config['train_pin_memory']
+                )
+            
+            self._check_dataloader_sampler()      
+            self.logger.info(f"[Rank {self._get_local_rank()}] Training for {len(self.dataloader)} batches per epoch.")
+           
+            for epoch in range(self.epochs):
+                # Create progress bar for the current epoch
+                progress_bar = tqdm(
+                    enumerate(self.dataloader),
+                    desc=f"Epoch {epoch + 1}/{self.epochs} | Loss: - | PPLX: - | LR: - | Time: -",
+                    total=len(self.dataloader),
+                    disable=(dist.get_rank()!=0 and self.parallel_type in ['fsdp', 'ddp']),
+                    ascii = False
+                )
                 
-                if self.mixed_precision:
-                    with autocast(device_type='cuda', dtype=self.mixed_precision_dtype()):
+                for i, (X, y) in progress_bar:
+                    X, y = X.to(self.device, non_blocking=True), y.to(self.device, non_blocking=True)
+                    
+                    if self.mixed_precision:
+                        with autocast(device_type='cuda', dtype=self.mixed_precision_dtype()):
+                            if is_main_rank:
+                                start_time = time.perf_counter()
+                            logits = self.model(X)
+                            loss = self.criterion(logits.view(-1, logits.size(-1)), y.view(-1))
+                        loss_avg, pplx_avg = self._get_avg_rank_loss_pplx(loss) 
+                        self.scaler.scale(loss_avg).backward() 
+                        self.scaler.unscale_(self.optimizer)
+                        if self.track_grad_norm:
+                            grad_norm_dict = self._get_grad_norm()
+                        self._clip_grad_norm()
+                        self.scaler.step(self.optimizer) 
+                        self.scaler.update()
+                        self.scheduler.step()
+                        if is_main_rank:
+                            end_time = time.perf_counter()
+                    else:
                         if is_main_rank:
                             start_time = time.perf_counter()
-                        logits = self.model(X)
+                        logits = self.model(X) 
                         loss = self.criterion(logits.view(-1, logits.size(-1)), y.view(-1))
-                    loss_avg, pplx_avg = self._get_avg_rank_loss_pplx(loss) 
-                    self.scaler.scale(loss_avg).backward() 
-                    self.scaler.unscale_(self.optimizer)
-                    if self.track_grad_norm:
-                        grad_norm_dict = self._get_grad_norm()
-                    self._clip_grad_norm()
-                    self.scaler.step(self.optimizer) 
-                    self.scaler.update()
-                    self.scheduler.step()
-                    if is_main_rank:
-                        end_time = time.perf_counter()
-                else:
-                    if is_main_rank:
-                        start_time = time.perf_counter()
-                    logits = self.model(X) 
-                    loss = self.criterion(logits.view(-1, logits.size(-1)), y.view(-1))
-                    loss_avg, pplx_avg = self._get_avg_rank_loss_pplx(loss) 
-                    loss_avg.backward()
-                    if is_main_rank:
-                        end_time = time.perf_counter()
-                    self._clip_grad_norm()
-                    if self.track_grad_norm:
-                        grad_norm_dict = self._get_grad_norm()
-                    self.optimizer.step()
-                    self.scheduler.step()
-                
-                global_steps += 1
-               
-                if is_main_rank: 
-                    progress_bar.set_description(
-                        f"Epoch {epoch + 1}/{self.epochs} | "
-                        f"Loss: {loss_avg:.4f} | "
-                        f"PPLX: {pplx_avg:.2f} | "
-                        f"LR: {self.scheduler.get_last_lr()[0]:.2e}"
-                        f"Time: {end_time - start_time:.2f}s"
-                    )
-                
-                if self.wandb_ and is_main_rank: 
-                    wandb_dict = {
-                        "loss": loss_avg,
-                        "perplexity": pplx_avg,
-                    }
+                        loss_avg, pplx_avg = self._get_avg_rank_loss_pplx(loss) 
+                        loss_avg.backward()
+                        if is_main_rank:
+                            end_time = time.perf_counter()
+                        self._clip_grad_norm()
+                        if self.track_grad_norm:
+                            grad_norm_dict = self._get_grad_norm()
+                        self.optimizer.step()
+                        self.scheduler.step()
                     
-                    if self.track_grad_norm:
-                        wandb_dict.update(grad_norm_dict)
-                        
-                    wandb.log(wandb_dict)  
-                   
-                if global_steps % self.checkpoint_steps == 0:
-                    dist.barrier() 
-                    self._clr_mem(gc_ = True, cuda_clr_cache = True, X = X, y = y, logits = logits)
+                    global_steps += 1
                    
                     if is_main_rank: 
-                        model_state_dict = self._get_model_state_dict()
-                        optim_state_dict = self._get_optim_state_dict()  
-                        scheduler_state_dict = self._get_scheduler_state_dict()
-                      
-                        self._save_checkpoint(
-                            model_state_dict = model_state_dict,
-                            optim_state_dict = optim_state_dict,
-                            scheduler_state_dict = scheduler_state_dict,
-                            epoch = epoch,
-                            steps = i + 1,
-                            global_steps = global_steps + 1,
-                            save_hf = self.save_hf
-                        ) 
-                   
-                if self.val_steps and (global_steps % self.val_steps == 0):
-                    self.model.eval() 
-                    if global_steps % self.checkpoint_steps != 0:
-                        dist.barrier()
-                        self._clr_mem(gc_ = True, cuda_clr_cache = True, X = X, y = y, logits = logits)
+                        progress_bar.set_description(
+                            f"Epoch {epoch + 1}/{self.epochs} | "
+                            f"Loss: {loss_avg:.4f} | "
+                            f"PPLX: {pplx_avg:.2f} | "
+                            f"LR: {self.scheduler.get_last_lr()[0]:.2e} | "
+                            f"Time: {end_time - start_time:.2f}s"
+                        )
                     
-                    val_dataloader = self._get_val_dataloader()
-                    val_progress_bar = tqdm(enumerate(val_dataloader), desc = "Evaluating", total = len(val_dataloader),
-                                        disable = (dist.get_rank()!=0 and self.parallel_type in ['fsdp', 'ddp']))
-                   
-                    val_steps = 0 
-                    loss_accum = 0
-                    pplx_accum = 0 
-                  
-                    with torch.no_grad(): 
-                        for i, (X_val, y_val) in val_progress_bar:
-                            X_val, y_val = X_val.to(self.device, non_blocking = True), y_val.to(self.device, non_blocking = True)
+                    if self.wandb_ and is_main_rank: 
+                        wandb_dict = {
+                            "loss": loss_avg,
+                            "perplexity": pplx_avg,
+                        }
+                        
+                        if self.track_grad_norm:
+                            wandb_dict.update(grad_norm_dict)
                             
-                            if self.val_mixed_precision:
-                                with autocast(device_type = 'cuda', dtype = self.val_mixed_precision_dtype):
+                        wandb.log(wandb_dict)  
+                   
+                    if global_steps % self.checkpoint_steps == 0:
+                        dist.barrier() 
+                        self._clr_mem(gc_ = True, cuda_clr_cache = True, X = X, y = y, logits = logits)
+                       
+                        if is_main_rank: 
+                            model_state_dict = self._get_model_state_dict()
+                            optim_state_dict = self._get_optim_state_dict()  
+                            scheduler_state_dict = self._get_scheduler_state_dict()
+                          
+                            self._save_checkpoint(
+                                model_state_dict = model_state_dict,
+                                optim_state_dict = optim_state_dict,
+                                scheduler_state_dict = scheduler_state_dict,
+                                epoch = epoch,
+                                steps = i + 1,
+                                global_steps = global_steps + 1,
+                                save_hf = self.save_hf
+                            ) 
+                   
+                    if self.val_steps and (global_steps % self.val_steps == 0):
+                        self.model.eval() 
+                        if global_steps % self.checkpoint_steps != 0:
+                            dist.barrier()
+                            self._clr_mem(gc_ = True, cuda_clr_cache = True, X = X, y = y, logits = logits)
+                        
+                        val_dataloader = self._get_val_dataloader()
+                        val_progress_bar = tqdm(enumerate(val_dataloader), desc = "Evaluating", total = len(val_dataloader),
+                                            disable = (dist.get_rank()!=0 and self.parallel_type in ['fsdp', 'ddp']))
+                       
+                        val_steps = 0 
+                        loss_accum = 0
+                        pplx_accum = 0 
+                      
+                        with torch.no_grad(): 
+                            for i, (X_val, y_val) in val_progress_bar:
+                                X_val, y_val = X_val.to(self.device, non_blocking = True), y_val.to(self.device, non_blocking = True)
+                                
+                                if self.val_mixed_precision:
+                                    with autocast(device_type = 'cuda', dtype = self.val_mixed_precision_dtype):
+                                        logits = self.model(X_val)
+                                        loss = self.criterion(logits.view(-1, logits.size(-1)), y_val.view(-1))
+                                    pplx = torch.exp(loss.item())
+                                    loss_avg, pplx_avg = self._get_avg_rank_loss_pplx(loss, pplx)
+                                else:
                                     logits = self.model(X_val)
                                     loss = self.criterion(logits.view(-1, logits.size(-1)), y_val.view(-1))
-                                pplx = torch.exp(loss.item())
-                                loss_avg, pplx_avg = self._get_avg_rank_loss_pplx(loss, pplx)
-                            else:
-                                logits = self.model(X_val)
-                                loss = self.criterion(logits.view(-1, logits.size(-1)), y_val.view(-1))
-                                pplx = torch.exp(loss.item())
-                                loss_avg, pplx_avg = self._get_avg_rank_loss_pplx(loss, pplx)
-                            
-                            loss_accum += loss_avg
-                            pplx_accum += pplx_avg
-                            val_steps += 1
+                                    pplx = torch.exp(loss.item())
+                                    loss_avg, pplx_avg = self._get_avg_rank_loss_pplx(loss, pplx)
+                                
+                                loss_accum += loss_avg
+                                pplx_accum += pplx_avg
+                                val_steps += 1
 
-                    val_loss = loss_accum / val_steps
-                    val_pplx = pplx_accum / val_steps
+                        val_loss = loss_accum / val_steps
+                        val_pplx = pplx_accum / val_steps
 
-                    if self.wandb_:
-                        wandb.log({
-                            "val loss": val_loss,
-                            "val perplexity": val_pplx
-                        })
+                        if self.wandb_:
+                            wandb.log({
+                                "val loss": val_loss,
+                                "val perplexity": val_pplx
+                            })
                    
-                    self._clr_mem(
-                        gc_ = True, 
-                        cuda_clr_cache = True, 
-                        X_val = X_val, 
-                        y_val = y_val, 
-                        logits = logits, 
-                        val_dataloader = val_dataloader
-                    ) 
-                    
-                    self.model.train()
+                        self._clr_mem(
+                            gc_ = True, 
+                            cuda_clr_cache = True, 
+                            X_val = X_val, 
+                            y_val = y_val, 
+                            logits = logits, 
+                            val_dataloader = val_dataloader
+                        ) 
+                        
+                        self.model.train()
 
-        self._cleanup()
-        self.cleanup()
+            self._cleanup()
+            self.cleanup()
+
+        except Exception as e:
+            
+            if e == KeyboardInterrupt:
+                self.logger.info(f"[Rank {self._get_local_rank()}] Training shutting down.")
+                self.cleanup()
+                self._cleanup()
+                sys.exit(0)
+            
+            self.logger.error(f"[Rank {self._get_local_rank()}] An error occurred during training: {e}")
+            self.logger.error(f"[Rank {self._get_local_rank()}] Traceback: \n\n {traceback.format_exc()}")
+            self.cleanup()
+            self._cleanup()
+            sys.exit(1)
 
     def cleanup(self):
         if hasattr(self, 'tee_handler') and self.tee_handler is not None:
