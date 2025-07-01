@@ -213,14 +213,21 @@ class Trainer:
         self._check_dataloader_sampler()      
         self.logger.info(f"[Rank {self._get_local_rank()}] Training for {len(self.dataloader)} batches per epoch.")
        
-        with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude):
-            progress_bar = tqdm(enumerate(self.dataloader), desc="Training", total=len(self.dataloader), 
-                                    disable = (dist.get_rank()!=0 and self.parallel_type in ['fsdp', 'ddp']))
-            for epoch in range(self.epochs):
-                for i, (X, y) in progress_bar:
-                    X, y = X.to(self.device, non_blocking = True), y.to(self.device, non_blocking = True)
+        for epoch in range(self.epochs):
+            # Create progress bar for the current epoch
+            progress_bar = tqdm(
+                enumerate(self.dataloader),
+                desc=f"Epoch {epoch + 1}/{self.epochs} | Loss: - | PPLX: - | LR: -",
+                total=len(self.dataloader),
+                disable=(dist.get_rank()!=0 and self.parallel_type in ['fsdp', 'ddp']),
+                ascii = False
+            )
+            
+            for i, (X, y) in progress_bar:
+                X, y = X.to(self.device, non_blocking=True), y.to(self.device, non_blocking=True)
+                
                 if self.mixed_precision:
-                    with autocast(device_type = 'cuda', dtype = self.mixed_precision_dtype()):
+                    with autocast(device_type='cuda', dtype=self.mixed_precision_dtype()):
                         if is_main_rank:
                             start_time = time.perf_counter()
                         logits = self.model(X)
@@ -251,13 +258,17 @@ class Trainer:
                     self.optimizer.step()
                     self.scheduler.step()
                 
-                global_steps += 1 
+                global_steps += 1
                
                 if is_main_rank: 
-                    progress_bar.set_description(desc = f"Epoch: {epoch + 1} | Local step: {i + 1} | \
-                                                 Global step: {global_steps + 1} | LR: {self.scheduler.get_last_lr()[0]} | Loss: {loss_avg} \
-                                                 | pplx: {pplx_avg} | Time: {end_time - start_time}") 
-               
+                    progress_bar.set_description(
+                        f"Epoch {epoch + 1}/{self.epochs} | "
+                        f"Loss: {loss_avg:.4f} | "
+                        f"PPLX: {pplx_avg:.2f} | "
+                        f"LR: {self.scheduler.get_last_lr()[0]:.2e}"
+                        f"Time: {end_time - start_time:.2f}s"
+                    )
+                
                 if self.wandb_ and is_main_rank: 
                     wandb_dict = {
                         "loss": loss_avg,
