@@ -1,3 +1,7 @@
 .env
 __pycache__
 data/
+.venv
+logs/
+checkpoints/
+wandb/
