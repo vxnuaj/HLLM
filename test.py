@@ -47,8 +47,8 @@ print(X_val_toks)
 
 print(f"Total Tokens: {X_toks + X_val_toks}")'''
 
-X_val = torch.load('data/tensors/train/X/X_train_1.pt')
-y_val = torch.load('data/tensors/train/y/y_train_0.pt')
+X_val = torch.load('data/tensors/val/X/X_val.pt')
+y_val = torch.load('data/tensors/val/y/Y_val.pt')
 
-print(X_val[0])
-print(y_val[0])
+print(X_val[0, 0:100])
+print(y_val[0, 0:100])
