@@ -222,7 +222,6 @@ class Trainer:
             
             self._check_device_warn()
             
-            # Initialize global steps and starting epoch from checkpoint if available
             if hasattr(self, '_chk_cont_global_step'):
                 global_steps = self._chk_cont_global_step
                 start_epoch = self._chk_cont_epoch
