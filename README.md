@@ -75,13 +75,13 @@ This repository contains code for building, profiling, and training a variant of
   - [X] Verify that the model is uploading dataset to hugging face.
   - [X] Verify that the model is logging to wandb.
   - [ ] need to verify that we can run validation
+    - [ ] Why is validation loss so low compared to the training loss, at the beginning of training????
 
 ### Pre-Training Prep
 
 - [ ] Prep for Pre-Training
   - [ ] Batch Size - Stress test VRAM to proper batch size for the dataloader_config.json
   - [ ] Figure out final hyperparameters for the LR Schedule based on batch size.
-  - [ ] need to set the dataloader ( val ) to cut for the first 512 tokens
 
   the configuration for the lr schedule is dependent on the number of steps in the entire training run, which is num_batches * epochs, and then that's dependent on the batch size.
 

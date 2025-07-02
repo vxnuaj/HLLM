@@ -401,44 +401,51 @@ class Trainer:
                         val_progress_bar = tqdm(enumerate(val_dataloader), desc = "Evaluating", total = len(val_dataloader),
                                             disable = (dist.get_rank()!=0 and self.parallel_type in ['fsdp', 'ddp']), ascii = False)
                        
+                     
+                        # the point of this is to accmulate the loss over the entire validation set 
+                        # and then calculate the average loss over the entire validation set 
+                     
+                        running_accum_val_loss = 0
+                        running_accum_val_pplx = 0
                         val_steps = 0 
-                        loss_accum = 0
-                        pplx_accum = 0
-                        total_samples = 0
                       
                         with torch.no_grad(): 
                             for i, (X_val, y_val) in val_progress_bar:
+                                val_steps += 1 
                                 X_val, y_val = X_val.to(self.device, non_blocking = True), y_val.to(self.device, non_blocking = True)
-                                
                                 if self.val_mixed_precision:
                                     with autocast(device_type = 'cuda', dtype = self.val_mixed_precision_dtype):
+                                        if is_main_rank:
+                                            start_time = time.perf_counter() 
                                         logits = self.model(X_val)
+                                        if is_main_rank:
+                                            end_time = time.perf_counter()
                                         loss = self.criterion(logits.view(-1, logits.size(-1)), y_val.view(-1))
                                     loss_avg, pplx_avg = self._get_avg_rank_loss_pplx(loss)
                                 else:
+                                    if is_main_rank:
+                                        start_time = time.perf_counter() 
                                     logits = self.model(X_val)
+                                    if is_main_rank:
+                                        end_time = time.perf_counter()
                                     loss = self.criterion(logits.view(-1, logits.size(-1)), y_val.view(-1))
                                     loss_avg, pplx_avg = self._get_avg_rank_loss_pplx(loss)
-                                
-                                loss_accum += loss_avg * batch_size
-                                pplx_accum += pplx_avg * batch_size
-                                total_samples += batch_size
-                                
-                                running_val_loss = loss_accum / total_samples
-                                running_val_pplx = pplx_accum / total_samples
-                                
+
+                                running_accum_val_loss += loss_avg
+                                running_accum_val_pplx += pplx_avg
+                              
+                                log_val_loss = running_accum_val_loss / val_steps 
+                                log_val_pplx = running_accum_val_pplx / val_steps 
+                               
                                 if is_main_rank:
                                     val_progress_bar.set_description(
-                                        f'Evaluating | Loss: {running_val_loss:.4f} | PPLX: {running_val_pplx:.2f}'
+                                        f'Evaluating | Loss: {log_val_loss:.4f} | PPLX: {log_val_pplx:.2f} | Time: {end_time - start_time:.5f}s'
                                     )
-
-                            val_loss = loss_accum / total_samples
-                            val_pplx = pplx_accum / total_samples
 
                         if self.wandb_ and is_main_rank:
                             wandb.log({
-                                "val_loss": val_loss,
-                                "val_perplexity": val_pplx
+                                "val_loss": log_val_loss,
+                                "val_perplexity": log_val_pplx
                             }, step=global_steps)  
                    
                         self._clr_mem(
@@ -450,7 +457,6 @@ class Trainer:
                             val_dataloader = val_dataloader
                         ) 
                         
-                        # restore console logging after validation bar
                         for _h in val_console_handlers:
                             self.logger.addHandler(_h)
                         
