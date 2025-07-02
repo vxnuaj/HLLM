@@ -403,11 +403,13 @@ class Trainer:
                        
                         val_steps = 0 
                         loss_accum = 0
-                        pplx_accum = 0 
+                        pplx_accum = 0
+                        total_samples = 0
                       
                         with torch.no_grad(): 
                             for i, (X_val, y_val) in val_progress_bar:
                                 X_val, y_val = X_val.to(self.device, non_blocking = True), y_val.to(self.device, non_blocking = True)
+                                batch_size = X_val.size(0)  # Get the current batch size
                                 
                                 if self.val_mixed_precision:
                                     with autocast(device_type = 'cuda', dtype = self.val_mixed_precision_dtype):
@@ -419,17 +421,17 @@ class Trainer:
                                     loss = self.criterion(logits.view(-1, logits.size(-1)), y_val.view(-1))
                                     loss_avg, pplx_avg = self._get_avg_rank_loss_pplx(loss)
                                 
-                                loss_accum += loss_avg
-                                pplx_accum += pplx_avg
-                                val_steps += 1
+                                loss_accum += loss_avg * batch_size
+                                pplx_accum += pplx_avg * batch_size
+                                total_samples += batch_size
 
-                                val_loss = loss_accum / val_steps
-                                val_pplx = pplx_accum / val_steps
+                            val_loss = loss_accum / total_samples
+                            val_pplx = pplx_accum / total_samples
 
-                                if is_main_rank:
-                                    val_progress_bar.set_description(
-                                        f'Evaluating | Avg. Val. Loss: {val_loss} | Agt. Val. Pplx: {val_pplx}'
-                                    )
+                            if is_main_rank:
+                                val_progress_bar.set_description(
+                                    f'Evaluating | Avg. Val. Loss: {val_loss} | Agt. Val. Pplx: {val_pplx}'
+                                )
 
                         if self.wandb_ and is_main_rank:
                             wandb.log({
