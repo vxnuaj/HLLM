@@ -160,7 +160,7 @@ class Trainer:
         self.optimizer = opt.AdamW(self.model.parameters(), **optimizer_config_dict)
         self.scheduler = self.get_scheduler(self.optimizer, **scheduler_config_dict)
     
-        if self.load_checkpoint:  # TODO : make sure we continue based off of the checkpoint epoch, global step, and local steps
+        if self.load_checkpoint:  
             self._chk_cont_epoch, self._chk_cont_global_step, self._chk_cont_local_steps = \
                 self._load_checkpoint(self.load_checkpoint_path) 
      
