@@ -138,9 +138,7 @@ class Trainer:
         self._setup_parallel()
         
         if not dist.is_initialized() or dist.get_rank() == 0:
-            ascii_art = fig.renderText(self.model_series_name)
-            colored_art = colored(ascii_art, color='red')
-            print(colored_art, flush=True)
+            self._ascii_art_model_name()
         
         self.device = self._get_device()
        
@@ -255,15 +253,25 @@ class Trainer:
             self.logger.info(f"[Rank {self._get_local_rank()}] Training {len(self.dataloader)} batches per epoch.\n")
             self.logger.info(f"[Rank {self._get_local_rank()}] Training {len(self.dataloader) * self.context_length} tokens per epoch.")
             self.logger.info(f"[Rank {self._get_local_rank()}] Training {len(self.dataloader) * self.context_length * (self.epochs - start_epoch)} tokens over remaining epochs.")
-            
-            # Initialize iterator and skip steps if resuming from checkpoint
+
+            if os.name == 'nt':
+                os.system('cls')
+            else:
+                os.system('clear')
+          
+            self._ascii_art_model_name() 
+           
             dataloader_iter = enumerate(self.dataloader)
             if hasattr(self, '_chk_cont_local_steps') and self._chk_cont_local_steps > 0:
-                # Skip to the step where we left off
                 for _ in range(self._chk_cont_local_steps + 1):
                     next(dataloader_iter)
             
             for epoch in range(start_epoch, self.epochs):
+                console_handlers = [h for h in self.logger.handlers if isinstance(h, logging.StreamHandler)]
+                self.console_handlers = console_handlers
+                for _h in console_handlers:
+                    self.logger.removeHandler(_h)
+                
                 progress_bar = tqdm(
                     dataloader_iter,
                     initial=self._chk_cont_local_steps if hasattr(self, '_chk_cont_local_steps') and epoch == start_epoch else 0,
@@ -273,10 +281,8 @@ class Trainer:
                     ascii = False
                 )
                 
-                # Reset local steps counter for the current epoch
                 if hasattr(self, '_chk_cont_local_steps') and epoch == start_epoch:
                     local_steps = self._chk_cont_local_steps
-                    # Clear the checkpoint steps after using them
                     del self._chk_cont_local_steps
                 else:
                     local_steps = 0
@@ -349,16 +355,37 @@ class Trainer:
                         scheduler_state_dict = self._get_scheduler_state_dict()                       
                         
                         if is_main_rank:
+                            checkpoint_path = os.path.join(self.save_checkpoint_path, f"RUN_{self.run_id}", 
+                                                         f'RUN_{self.run_id}_DATETIME_{self.run_start_date_time}_EPOCH_{epoch}_STEP_{local_steps}_GLOBAL_STEPS_{global_steps}.pt')
+                            
+                            progress_bar.set_description(
+                                f"Epoch {epoch + 1}/{self.epochs} | "
+                                f"Loss: {loss_avg:.4f} | "
+                                f"PPLX: {pplx_avg:.2f} | "
+                                f"LR: {self.scheduler.get_last_lr()[0]:.2e} | "
+                                f"Saving checkpoint..."
+                            )
+                            
                             self._save_checkpoint(
-                                    model_state_dict = model_state_dict,
-                                    optim_state_dict = optim_state_dict,
-                                    scheduler_state_dict = scheduler_state_dict,
-                                    epoch = epoch,
-                                    steps = local_steps,
-                                    global_steps = global_steps,
-                                ) 
+                                model_state_dict=model_state_dict,
+                                optim_state_dict=optim_state_dict,
+                                scheduler_state_dict=scheduler_state_dict,
+                                epoch=epoch,
+                                steps=local_steps,
+                                global_steps=global_steps,
+                            )
+                            
+                            progress_bar.set_description(
+                                f"Epoch {epoch + 1}/{self.epochs} | "
+                                f"Loss: {loss_avg:.4f} | "
+                                f"PPLX: {pplx_avg:.2f} | "
+                                f"LR: {self.scheduler.get_last_lr()[0]:.2e} | "
+                                f"Checkpoint saved"
+                            )
+                            
+                            self.logger.info(f"[Rank {self._get_local_rank()}] Checkpoint saved to {checkpoint_path}")
                       
-                        dist.barrier() 
+                        dist.barrier()
                    
                     if self.val_steps and (global_steps % self.val_steps == 0):
                         self.model.eval() 
@@ -367,6 +394,11 @@ class Trainer:
                             self._clr_mem(gc_ = True, cuda_clr_cache = True, X = X, y = y, logits = logits)
                         
                         val_dataloader = self._get_val_dataloader()
+                        
+                        val_console_handlers = [h for h in self.logger.handlers if isinstance(h, logging.StreamHandler)]
+                        for _h in val_console_handlers:
+                            self.logger.removeHandler(_h)
+                        
                         val_progress_bar = tqdm(enumerate(val_dataloader), desc = "Evaluating", total = len(val_dataloader),
                                             disable = (dist.get_rank()!=0 and self.parallel_type in ['fsdp', 'ddp']))
                        
@@ -412,10 +444,15 @@ class Trainer:
                             val_dataloader = val_dataloader
                         ) 
                         
+                        # restore console logging after validation bar
+                        for _h in val_console_handlers:
+                            self.logger.addHandler(_h)
+                        
                         self.model.train()
                 
-                # Reset the iterator for the next epoch
                 dataloader_iter = enumerate(self.dataloader)
+
+                self._restore_console_logging()
 
             self._cleanup()
             self.cleanup()
@@ -573,7 +610,7 @@ class Trainer:
     def _get_optim_state_dict(self):
         self.logger.info(f'[Rank {self._get_local_rank()}] Getting optimizer state dict')
         if self.parallel_type == 'fsdp':
-            state_dict = FSDP.full_optim_state_dict(self.model, self.optimizer, rank0_only=True) # hangs here btw.
+            state_dict = FSDP.full_optim_state_dict(self.model, self.optimizer, rank0_only=True) 
             dist.barrier()
             self.logger.info(f'[Rank {self._get_local_rank()}] Got optimizer state dict')
             return state_dict
@@ -609,7 +646,6 @@ class Trainer:
       
         self.logger.info(f"[Rank {self._get_local_rank()}] Saving checkpoint at epoch {epoch} and global steps {global_steps}.") 
        
-        # save locally
         torch.save(
                 {'epoch': epoch, 'global_steps': global_steps, 'local_steps': steps, 'model_state_dict': model_state_dict,
                  'optim_state_dict': optim_state_dict, 'scheduler_state_dict': scheduler_state_dict},
@@ -825,7 +861,7 @@ class Trainer:
                 self.stdout.flush()
                
             def isatty(self):
-                return self.stdout.isatty()  # or return False if you're logging to file-only
+                return self.stdout.isatty()  
                
             def close(self):
                 sys.stdout = self.stdout
@@ -912,19 +948,25 @@ class Trainer:
 
     def _load_checkpoint(self, checkpoint_path):
         checkpoint = torch.load(checkpoint_path, map_location='cpu')
-        
+       
+        self.logger.info(f"[Rank {self._get_local_rank()}] Loading checkpoint from {checkpoint_path}") 
         model_state_dict = checkpoint.get('model', checkpoint.get('model_state_dict'))
+        self.logger.info(f"[Rank {self._get_local_rank()}] Model state dict loaded") 
+        
         if model_state_dict is None:
             raise KeyError("No model state dict found in checkpoint")
         self.model.load_state_dict(model_state_dict)
+       
+        self.logger.info(f"[Rank {self._get_local_rank()}] Loading optimizer state dict") 
         
         optim_state_dict = checkpoint.get('optim', checkpoint.get('optim_state_dict'))
         if optim_state_dict is not None:
+            self.logger.info(f"[Rank {self._get_local_rank()}] Optimizer state dict loaded")
+            
             chk_groups = optim_state_dict.get('param_groups', [])
             cur_groups = self.optimizer.param_groups
 
             if len(chk_groups) != len(cur_groups):
-                # Log the issue and continue with a fresh optimizer state instead of raising.
                 self.logger.warning(
                     "Skipping optimizer state load: checkpoint has %d param groups but current "
                     "optimizer expects %d. Starting with a fresh optimizer state.",
@@ -942,9 +984,11 @@ class Trainer:
                     self.logger.warning(
                         f"Could not load optimizer state: {str(e)}. Starting with fresh optimizer state."
                     )
-        
+       
+        self.logger.info(f"[Rank {self._get_local_rank()}] Loading scheduler state dict") 
         scheduler_state_dict = checkpoint.get('scheduler_state_dict')
         if scheduler_state_dict is not None:
+            self.logger.info(f"[Rank {self._get_local_rank()}] Scheduler state dict loaded")
             try:
                 self.scheduler.load_state_dict(scheduler_state_dict)
             except (ValueError, KeyError) as e:
@@ -984,6 +1028,18 @@ class Trainer:
             {"params": no_decay, "weight_decay": 0.0},
         ]
 
+    def _restore_console_logging(self):
+        if hasattr(self, 'console_handlers'):
+            for handler in self.console_handlers:
+                if handler not in self.logger.handlers:  
+                    self.logger.addHandler(handler)
+
+    def _ascii_art_model_name(self):
+        fig = Figlet(font='larry3d')
+        ascii_art = fig.renderText(f"{self.model_series_name}")
+        colored_art = colored(ascii_art, color='red')
+        print(colored_art, flush=True)
+ 
 @contextmanager
 def supress_logging(logger, disable=None, disable_exclude=None):
     

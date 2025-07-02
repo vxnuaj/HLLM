@@ -68,8 +68,8 @@ This repository contains code for building, profiling, and training a variant of
     - [X] FSDP
   - [X] Verify model is learning
   - [X] Verify that the model is saving checkpoints locally.
-  - [ ] Verify that the checkpoints are properly saved (reusable).
-  - [ ] Make sure, given same exact configuration, we're starting off from the samep point in the dataset ( properly best to save a seed in the dataloader and input to torch.save )
+  - [X] Verify that the checkpoints are properly saved (reusable).
+  - [X] Make sure, given same exact configuration, we're starting off from the samep point in the dataset ( properly best to save a seed in the dataloader and input to torch.save )
   - [X] Verify that the model is saving logs locally.
   - [X] Verify that the model is uploading checkpoints to hugging face.
   - [X] Verify that the model is uploading dataset to hugging face.
