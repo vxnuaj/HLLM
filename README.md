@@ -43,7 +43,7 @@ This repository contains code for building, profiling, and training a variant of
 - [X] `train.py`
 - [X] Figure out if there's anything else you can do to optimize the training loop.
 
-## Training
+## Pre-Pre-Training Prep
 
 - [ ] Figure out final configurations for the model ( .json files ).
   - [x] dataloader_config.json
@@ -74,10 +74,10 @@ This repository contains code for building, profiling, and training a variant of
   - [X] Verify that the model is uploading checkpoints to hugging face.
   - [X] Verify that the model is uploading dataset to hugging face.
   - [X] Verify that the model is logging to wandb.
-  - [ ] dont want logs to interrupt progress bar, but want to be saved to the .log file.
+
+### Pre-Training Prep
 
 - [ ] Prep for Pre-Training
-
   - [ ] Batch Size - Stress test VRAM to proper batch size for the dataloader_config.json
   - [ ] Figure out final hyperparameters for the LR Schedule based on batch size.
 

@@ -200,7 +200,6 @@ class Trainer:
         self.train_data_root_path = self.train_dataloader_config['train_data_root_path']
  
     def train(self):
-        """Train the model"""
         
         def signal_handler(signum, frame):
             self.logger.info("\nReceived interrupt signal. Cleaning up...")
