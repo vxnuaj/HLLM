@@ -153,6 +153,28 @@ class Trainer:
         del scheduler_config_dict['extra_args']
 
         self.criterion = nn.CrossEntropyLoss(**criterion_config_dict)
+        
+        # -------------------------------------------------------------
+        # Language-model loss helper: aligns logits and labels so that
+        # each token predicts the *next* token (standard causal LM).
+        # -------------------------------------------------------------
+        def _compute_lm_loss(logits: torch.Tensor, labels: torch.Tensor):
+            """Return next-token cross-entropy.
+            
+            logits: (B, T, V)
+            labels: (B, T)
+            """
+            shift_logits = logits[:, :-1, :].contiguous()  # 0 … T-2
+            shift_labels = labels[:, 1:].contiguous()     # 1 … T-1
+            
+            shift_logits = shift_logits.view(-1, shift_logits.size(-1))
+            shift_labels = shift_labels.view(-1)
+            
+            return self.criterion(shift_logits, shift_labels)
+        
+        # make it accessible in other methods
+        self._compute_lm_loss = _compute_lm_loss
+        
         self.optimizer = opt.AdamW(self._build_param_groups(self.model, optimizer_config_dict), **{k: v for k, v in optimizer_config_dict.items() if k != 'weight_decay'})
         self.scheduler = self.get_scheduler(self.optimizer, **scheduler_config_dict)
     
@@ -295,7 +317,7 @@ class Trainer:
                             if is_main_rank:
                                 start_time = time.perf_counter()
                             logits = self.model(X)
-                            loss = self.criterion(logits.view(-1, logits.size(-1)), y.view(-1))
+                            loss = self._compute_lm_loss(logits, y) 
                         loss_avg, pplx_avg = self._get_avg_rank_loss_pplx(loss) 
                         self.scaler.scale(loss_avg).backward() 
                         self.scaler.unscale_(self.optimizer)
@@ -311,7 +333,7 @@ class Trainer:
                         if is_main_rank:
                             start_time = time.perf_counter()
                         logits = self.model(X) 
-                        loss = self.criterion(logits.view(-1, logits.size(-1)), y.view(-1))
+                        loss = self._compute_lm_loss(logits, y) 
                         loss_avg, pplx_avg = self._get_avg_rank_loss_pplx(loss) 
                         loss_avg.backward()
                         if is_main_rank:
@@ -414,11 +436,11 @@ class Trainer:
                                 if self.val_mixed_precision:
                                     with autocast(device_type = 'cuda', dtype = self.val_mixed_precision_dtype):
                                         logits = self.model(X_val)
-                                        loss = self.criterion(logits.view(-1, logits.size(-1)), y_val.view(-1))
+                                        loss = self._compute_lm_loss(logits, y_val) 
                                     loss_avg, pplx_avg = self._get_avg_rank_loss_pplx(loss)
                                 else:
                                     logits = self.model(X_val)
-                                    loss = self.criterion(logits.view(-1, logits.size(-1)), y_val.view(-1))
+                                    loss = self._compute_lm_loss(logits, y_val) 
                                     loss_avg, pplx_avg = self._get_avg_rank_loss_pplx(loss)
                                 
                                 loss_accum += loss_avg * batch_size
