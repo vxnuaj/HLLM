@@ -2,6 +2,7 @@ import torch
 import os
 import tinytok.core as tt
 
+from datetime import datetime
 from huggingface_hub import HfApi, login, whoami
 from dotenv import load_dotenv
 
@@ -47,14 +48,13 @@ batch_first = True
 val_train_n_samples = 2000
 
 if __name__ == "__main__":
-  
-    tt.download_tinystories(save_dir) 
-
     X_train_pth = 'data/tensors/train/X'
     y_train_pth = 'data/tensors/train/y'
     X_val_pth = 'data/tensors/val/X'
     y_val_pth = 'data/tensors/val/y'
-   
+ 
+    tt.download_tinystories(save_dir) 
+  
     os.makedirs(X_train_pth, exist_ok = True)
     os.makedirs(y_train_pth, exist_ok = True)
     os.makedirs(X_val_pth, exist_ok = True)
@@ -147,6 +147,10 @@ if __name__ == "__main__":
     total_token_count = train_token_count + val_token_count
     
     # --- upload to hugging face ---
+
+    train_token_count = 266666496
+    val_token_count = 2233116
+    total_token_count = train_token_count + val_token_count
 
     api = HfApi()
 

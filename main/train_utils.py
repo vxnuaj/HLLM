@@ -399,7 +399,7 @@ class Trainer:
                             self.logger.removeHandler(_h)
                         
                         val_progress_bar = tqdm(enumerate(val_dataloader), desc = "Evaluating", total = len(val_dataloader),
-                                            disable = (dist.get_rank()!=0 and self.parallel_type in ['fsdp', 'ddp']))
+                                            disable = (dist.get_rank()!=0 and self.parallel_type in ['fsdp', 'ddp']), ascii = False)
                        
                         val_steps = 0 
                         loss_accum = 0
@@ -413,20 +413,23 @@ class Trainer:
                                     with autocast(device_type = 'cuda', dtype = self.val_mixed_precision_dtype):
                                         logits = self.model(X_val)
                                         loss = self.criterion(logits.view(-1, logits.size(-1)), y_val.view(-1))
-                                    pplx = torch.exp(loss.item())
-                                    loss_avg, pplx_avg = self._get_avg_rank_loss_pplx(loss, pplx)
+                                    loss_avg, pplx_avg = self._get_avg_rank_loss_pplx(loss)
                                 else:
                                     logits = self.model(X_val)
                                     loss = self.criterion(logits.view(-1, logits.size(-1)), y_val.view(-1))
-                                    pplx = torch.exp(loss.item())
-                                    loss_avg, pplx_avg = self._get_avg_rank_loss_pplx(loss, pplx)
+                                    loss_avg, pplx_avg = self._get_avg_rank_loss_pplx(loss)
                                 
                                 loss_accum += loss_avg
                                 pplx_accum += pplx_avg
                                 val_steps += 1
 
-                        val_loss = loss_accum / val_steps
-                        val_pplx = pplx_accum / val_steps
+                                val_loss = loss_accum / val_steps
+                                val_pplx = pplx_accum / val_steps
+
+                                if is_main_rank:
+                                    val_progress_bar.set_description(
+                                        f'Evaluating | Avg. Val. Loss: {val_loss} | Agt. Val. Pplx: {val_pplx}'
+                                    )
 
                         if self.wandb_ and is_main_rank:
                             wandb.log({

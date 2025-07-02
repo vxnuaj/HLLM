@@ -11,3 +11,5 @@ rich
 tee-logger
 pyfiglet
 termcolor
+nvitop
+torchinfo

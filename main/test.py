@@ -16,8 +16,12 @@ model_config = get_config(
     config_type = 'model'
 )
 
-model = LLaMA(**model_config)    
+print('initializing model')
 
+model = LLaMA(**model_config)
+
+print('initializing tensor')
 x = torch.randint(low = 0, high = 10000, size = (1, 512)) # batch_size \times seq_len
 
+print('getting summary')
 summary(model, input_data = x)

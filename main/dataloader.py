@@ -101,7 +101,6 @@ def get_data(path, context_length=512):
     if X.size(0) != y.size(0):
         raise ValueError(f"Mismatched number of samples: X has {X.size(0)}, y has {y.size(0)}")
     
-    print(f'Successfully loaded {X.size(0)} samples with sequence length {X.size(1)}')
     return X, y
 
 def get_dataloader(
