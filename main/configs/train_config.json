@@ -4,7 +4,7 @@
     "epochs": 5,
     "checkpoint_steps": 10,
     "save_checkpoint_path": "main/checkpoints",
-    "save_hf": true,
+    "save_hf": false,
     "val_steps": 100000,
     "mixed_precision": false, 
     "mixed_precision_dtype": "f16",
@@ -28,5 +28,5 @@
         "hf_root_path": "ATHENA_V1_TINY_39.7M/checkpoints"
     },
     "load_checkpoint": true,
-    "load_checkpoint_path": "main/checkpoints/RUN_1_DATETIME_2025-06-29_19-55-25/checkpoint_1.pt"
+    "load_checkpoint_path": "main/checkpoints/RUN_001/RUN_001_DATETIME_2025-07-02_08-16-58_EPOCH_0_STEP_10_GLOBAL_STEPS_10.pt"
 }

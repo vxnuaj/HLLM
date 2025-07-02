@@ -2,9 +2,7 @@ import torch
 import torch.nn as nn
 import torch.optim as opt
 import torch.distributed as dist
-import numpy as np
 
-import rand
 import logging
 import json
 import math
@@ -157,22 +155,26 @@ class Trainer:
         del scheduler_config_dict['extra_args']
 
         self.criterion = nn.CrossEntropyLoss(**criterion_config_dict)
-        self.optimizer = opt.AdamW(self.model.parameters(), **optimizer_config_dict)
+        self.optimizer = opt.AdamW(self._build_param_groups(self.model, optimizer_config_dict), **{k: v for k, v in optimizer_config_dict.items() if k != 'weight_decay'})
         self.scheduler = self.get_scheduler(self.optimizer, **scheduler_config_dict)
     
-        if self.load_checkpoint:  
+        if self.load_checkpoint:
+            assert self.load_checkpoint_path is not None, ValueError("load_checkpoint_path must be specified if load_checkpoint is True")
+            assert isinstance(self.load_checkpoint_path, str), ValueError("load_checkpoint_path must be a string") 
+            
             self._chk_cont_epoch, self._chk_cont_global_step, self._chk_cont_local_steps = \
                 self._load_checkpoint(self.load_checkpoint_path) 
-     
+ 
+        if self.load_checkpoint_path is not None and not self.load_checkpoint:
+            self.logger.warning("load_checkpoint_path is specified but load_checkpoint is False, will not start from checkpoint")
+              
         self.run_id = self.get_run_id()
         
         if self.wandb_:
-            with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude):
-                self.logger.info(f"[Rank {self._get_local_rank()}] Logging to wandb project {self.wandb_config.project} as {self.wandb_config.name}_RUN_{self.run_id}")
+            self.logger.info(f"[Rank {self._get_local_rank()}] Logging to wandb project {self.wandb_config.project} as {self.wandb_config.name}_RUN_{self.run_id}")
             wandb.login(key = self.wandb_token) 
         if self.save_hf:
-            with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude):
-                self.logger.info(f"[Rank {self._get_local_rank()}] Logging to hugging face repo {self.hf_repo_id}")
+            self.logger.info(f"[Rank {self._get_local_rank()}] Logging to hugging face repo {self.hf_repo_id}")
             hf_login(token = self.hf_token) 
 
         self.logger.setLevel(self.log_level)
@@ -609,9 +611,9 @@ class Trainer:
        
         # save locally
         torch.save(
-                {'epoch': epoch, 'global_steps': global_steps, 'local_steps': steps, 'model': model_state_dict,
-                 'optim': optim_state_dict, 'scheduler_state_dict': scheduler_state_dict},
-                f = os.path.join(root_path, f'RUN_{self.run_id}_DATETIME_{self.run_start_date_time}_checkpoint_{epoch}_step_{steps}_global_steps_{global_steps}.pt')
+                {'epoch': epoch, 'global_steps': global_steps, 'local_steps': steps, 'model_state_dict': model_state_dict,
+                 'optim_state_dict': optim_state_dict, 'scheduler_state_dict': scheduler_state_dict},
+                f = os.path.join(root_path, f'RUN_{self.run_id}_DATETIME_{self.run_start_date_time}_EPOCH_{epoch}_STEP_{steps}_GLOBAL_STEPS_{global_steps}.pt')
             ) 
            
         self.logger.info(f"[Rank {self._get_local_rank()}] Saved checkpoint at epoch {epoch} and global steps {global_steps}.") 
@@ -637,9 +639,9 @@ class Trainer:
                
                 api.upload_file(
                     path_or_fileobj = os.path.join(root_path, \
-                        f'RUN_{self.run_id}_DATETIME_{self.run_start_date_time}_checkpoint_{epoch}_step_{steps}_global_steps_{global_steps}.pt'),
+                        f'RUN_{self.run_id}_DATETIME_{self.run_start_date_time}_EPOCH_{epoch}_step_{steps}_global_steps_{global_steps}.pt'),
                     path_in_repo = os.path.join(self.hf_root_path, f'RUN_{self.run_id}', \
-                        f'RUN_{self.run_id}_DATETIME_{self.run_start_date_time}_checkpoint_{epoch}_step_{steps}_global_steps_{global_steps}.pt'),
+                        f'RUN_{self.run_id}_DATETIME_{self.run_start_date_time}_EPOCH_{epoch}_STEP_{steps}_GLOBAL_STEPS_{global_steps}.pt'),
                     repo_id = self.hf_repo_id,
                     repo_type = self.hf_repo_type if self.hf_repo_type else None,
                 )
@@ -908,15 +910,79 @@ class Trainer:
         
         return input_list[0]
 
-    def _load_checkpoint(self, checkpoint_path): # TODO - ¿¿¿ dist ???
-
+    def _load_checkpoint(self, checkpoint_path):
         checkpoint = torch.load(checkpoint_path, map_location='cpu')
         
-        self.model.load_state_dict(checkpoint['model'])
-        self.optimizer.load_state_dict(checkpoint['optimizer'])
-        self.scheduler.load_state_dict(checkpoint['scheduler'])
+        model_state_dict = checkpoint.get('model', checkpoint.get('model_state_dict'))
+        if model_state_dict is None:
+            raise KeyError("No model state dict found in checkpoint")
+        self.model.load_state_dict(model_state_dict)
         
-        return checkpoint['epoch'], checkpoint['global_step'], checkpoint['local_steps']
+        optim_state_dict = checkpoint.get('optim', checkpoint.get('optim_state_dict'))
+        if optim_state_dict is not None:
+            chk_groups = optim_state_dict.get('param_groups', [])
+            cur_groups = self.optimizer.param_groups
+
+            if len(chk_groups) != len(cur_groups):
+                # Log the issue and continue with a fresh optimizer state instead of raising.
+                self.logger.warning(
+                    "Skipping optimizer state load: checkpoint has %d param groups but current "
+                    "optimizer expects %d. Starting with a fresh optimizer state.",
+                    len(chk_groups), len(cur_groups)
+                )
+            else:
+                try:
+                    if self.parallel_type == 'fsdp' and optim_state_dict is not None:
+                        try:
+                            optim_state_dict = FSDP.optim_state_dict_to_load(self.model, self.optimizer, optim_state_dict)
+                        except Exception as e:
+                            self.logger.warning(f"[Rank {self._get_local_rank()}] Could not convert FSDP optimizer state dict: {e}")
+                    self.optimizer.load_state_dict(optim_state_dict)
+                except (ValueError, KeyError) as e:
+                    self.logger.warning(
+                        f"Could not load optimizer state: {str(e)}. Starting with fresh optimizer state."
+                    )
+        
+        scheduler_state_dict = checkpoint.get('scheduler_state_dict')
+        if scheduler_state_dict is not None:
+            try:
+                self.scheduler.load_state_dict(scheduler_state_dict)
+            except (ValueError, KeyError) as e:
+                self.logger.warning(f"Could not load scheduler state: {str(e)}. Starting with fresh scheduler state.")
+        
+        return (
+            checkpoint.get('epoch', 0),
+            checkpoint.get('global_step', 0),
+            checkpoint.get('local_steps', 0)
+        )
+
+    def _build_param_groups(self, model: nn.Module, optim_cfg: dict):
+        """Create a deterministic AdamW param-group list.
+
+        Groups:
+          1. params with weight decay (all parameters except biases & 1-D like layer-norm weights)
+          2. params without weight decay (biases & layer-norm/embedding weights)
+
+        This matches the commonly used GPT/LLaMA weight-decay scheme and guarantees
+        we always end up with exactly two param groups, independent of model size,
+        so `load_state_dict` never complains about a group-count mismatch.
+        """
+
+        weight_decay = optim_cfg.get("weight_decay", 0.0)
+
+        decay, no_decay = [], []
+        for name, param in model.named_parameters():
+            if not param.requires_grad:
+                continue  # frozen params
+            if param.ndim >= 2 and not name.endswith("bias"):
+                decay.append(param)
+            else:
+                no_decay.append(param)
+
+        return [
+            {"params": decay, "weight_decay": weight_decay},
+            {"params": no_decay, "weight_decay": 0.0},
+        ]
 
 @contextmanager
 def supress_logging(logger, disable=None, disable_exclude=None):

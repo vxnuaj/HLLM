@@ -5,7 +5,6 @@ import random
 import numpy
 
 from torch.utils.data import Dataset, DataLoader, DistributedSampler, SequentialSampler
-from train_utils import Trainer
 
 class TinyStoriesDataset(Dataset):
     def __init__(self, X, y, context_length=512):
