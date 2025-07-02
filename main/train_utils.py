@@ -424,14 +424,17 @@ class Trainer:
                                 loss_accum += loss_avg * batch_size
                                 pplx_accum += pplx_avg * batch_size
                                 total_samples += batch_size
+                                
+                                running_val_loss = loss_accum / total_samples
+                                running_val_pplx = pplx_accum / total_samples
+                                
+                                if is_main_rank:
+                                    val_progress_bar.set_description(
+                                        f'Evaluating | Loss: {running_val_loss:.4f} | PPLX: {running_val_pplx:.2f}'
+                                    )
 
                             val_loss = loss_accum / total_samples
                             val_pplx = pplx_accum / total_samples
-
-                            if is_main_rank:
-                                val_progress_bar.set_description(
-                                    f'Evaluating | Avg. Val. Loss: {val_loss} | Agt. Val. Pplx: {val_pplx}'
-                                )
 
                         if self.wandb_ and is_main_rank:
                             wandb.log({
