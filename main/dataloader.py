@@ -133,21 +133,18 @@ def get_dataloader(
         DataLoader configured for the specified parallelism type
     """
     
-    print("Loading dataset")
     dataset = TinyStoriesDataset(X, y)
     _val_distributed = ['fsdp', 'ddp']
 
     if parallelism_type in _val_distributed:
         if rank is None:
             raise ValueError("Rank must be provided for DDP/FSDP")
-        print(f"Loading Distributed Sampler for {parallelism_type}")
         sampler = DistributedSampler(
             dataset,
             rank=rank,
             shuffle=shuffle
         )
     else:
-        print(f"Loading sequential sampler{' for DP' if parallelism_type == 'dp' else ''}")
         sampler = SequentialSampler(dataset)
 
     dataloader = DataLoader(

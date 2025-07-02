@@ -50,12 +50,17 @@ class Trainer:
         optimizer_config:dict,
         scheduler_config:dict,
         wandb_config:dict,
-        train_config:dict 
+        train_config:dict,
+        debug:bool = False,
+        debug_level:str = 'INFO'
         ):
+   
+        if debug:
+            os.environ['NCCL_DEBUG'] = debug_level
     
         assert torch.cuda.is_available(), ValueError("No CUDA device found")
         torch.cuda.set_device(f"cuda:{os.environ.get('LOCAL_RANK')}")
-      
+     
         self.model_config = ModelConfig(**model_config)
         self.criterion_config = CriterionConfig(**criterion_config)
         self.optimizer_config = OptimizerConfig(**optimizer_config)
@@ -189,15 +194,15 @@ class Trainer:
  
     def train(self):
         """Train the model"""
-        # Signal handler for graceful shutdown
+        
         def signal_handler(signum, frame):
             self.logger.info("\nReceived interrupt signal. Cleaning up...")
             self.cleanup()
             self._cleanup()
-            sys.exit(0)
+            os._exit(0)  
             
-        # Register the signal handler
         signal.signal(signal.SIGINT, signal_handler)
+        should_abort = torch.tensor(0, device=self.device)
         
         try:
             rank = dist.get_rank() 
@@ -222,12 +227,20 @@ class Trainer:
                 shuffle=self.train_dataloader_config['train_shuffle'], 
                 pin_memory=self.train_dataloader_config['train_pin_memory']
                 )
-            
-            self._check_dataloader_sampler()      
-            self.logger.info(f"[Rank {self._get_local_rank()}] Training for {len(self.dataloader)} batches per epoch.")
            
+            self._check_dataloader_sampler()      
+            self.logger.info(f"[GLOBAL] Training {len(self.dataloader) * int(dist.get_world_size())} batches per epoch over all RANKS.")
+            self.logger.info(f"[GLOBAL] Training {len(self.dataloader) * self.context_length * int(dist.get_world_size())} tokens per \
+                             epoch over all RANKS.")
+            self.logger.info(f"[GLOBAL] Training {len(self.dataloader) * self.context_length * int(dist.get_world_size()) * self.epochs} \
+                             tokens over all epochs over all RANKS.")             
+            
+            self.logger.info(f"[Rank {self._get_local_rank()}] Training {len(self.dataloader)} batches per epoch.\n")
+            self.logger.info(f"[Rank {self._get_local_rank()}] Training {len(self.dataloader) * self.context_length} tokens per epoch.")
+            self.logger.info(f"[Rank {self._get_local_rank()}] Training {len(self.dataloader) * self.context_length * self.epochs} tokens over all epochs.")
+            
             for epoch in range(self.epochs):
-                # Create progress bar for the current epoch
+                
                 progress_bar = tqdm(
                     enumerate(self.dataloader),
                     desc=f"Epoch {epoch + 1}/{self.epochs} | Loss: - | PPLX: - | LR: - | Time: -",
@@ -279,7 +292,7 @@ class Trainer:
                             f"Loss: {loss_avg:.4f} | "
                             f"PPLX: {pplx_avg:.2f} | "
                             f"LR: {self.scheduler.get_last_lr()[0]:.2e} | "
-                            f"Time: {end_time - start_time:.2f}s"
+                            f"Time: {end_time - start_time:.5f}s"
                         )
                     
                     if self.wandb_ and is_main_rank: 
@@ -296,21 +309,24 @@ class Trainer:
                     if global_steps % self.checkpoint_steps == 0:
                         dist.barrier() 
                         self._clr_mem(gc_ = True, cuda_clr_cache = True, X = X, y = y, logits = logits)
+                        dist.barrier() 
                        
-                        if is_main_rank: 
-                            model_state_dict = self._get_model_state_dict()
-                            optim_state_dict = self._get_optim_state_dict()  
-                            scheduler_state_dict = self._get_scheduler_state_dict()
-                          
+                        model_state_dict = self._get_model_state_dict()
+                        optim_state_dict = self._get_optim_state_dict() 
+                        scheduler_state_dict = self._get_scheduler_state_dict() # hangs here now                       
+                        
+                        if is_main_rank:
+                            
                             self._save_checkpoint(
-                                model_state_dict = model_state_dict,
-                                optim_state_dict = optim_state_dict,
-                                scheduler_state_dict = scheduler_state_dict,
-                                epoch = epoch,
-                                steps = i + 1,
-                                global_steps = global_steps + 1,
-                                save_hf = self.save_hf
-                            ) 
+                                    model_state_dict = model_state_dict,
+                                    optim_state_dict = optim_state_dict,
+                                    scheduler_state_dict = scheduler_state_dict,
+                                    epoch = epoch,
+                                    steps = i + 1,
+                                    global_steps = global_steps,
+                                ) 
+                  
+                        dist.barrier() 
                    
                     if self.val_steps and (global_steps % self.val_steps == 0):
                         self.model.eval() 
@@ -370,18 +386,20 @@ class Trainer:
             self.cleanup()
 
         except Exception as e:
+            should_abort.fill_(1)
+            dist.all_reduce(should_abort, op=dist.ReduceOp.MAX)
             
-            if e == KeyboardInterrupt:
-                self.logger.info(f"[Rank {self._get_local_rank()}] Training shutting down.")
-                self.cleanup()
-                self._cleanup()
-                sys.exit(0)
-            
-            self.logger.error(f"[Rank {self._get_local_rank()}] An error occurred during training: {e}")
-            self.logger.error(f"[Rank {self._get_local_rank()}] Traceback: \n\n {traceback.format_exc()}")
-            self.cleanup()
-            self._cleanup()
-            sys.exit(1)
+            if should_abort.item() == 1:
+                self.logger.error(f"[Rank {self._get_local_rank()}] An error occurred during training: {e}")
+                self.logger.error(f"[Rank {self._get_local_rank()}] Traceback: \n\n {traceback.format_exc()}")
+                
+                try:
+                    self.cleanup()
+                    self._cleanup()
+                except Exception as cleanup_err:
+                    self.logger.error(f"[Rank {self._get_local_rank()}] Error during cleanup: {cleanup_err}")
+                
+                os._exit(1)
 
     def cleanup(self):
         if hasattr(self, 'tee_handler') and self.tee_handler is not None:
@@ -490,23 +508,29 @@ class Trainer:
             loss_avg_scalar = loss.mean() 
             dist.all_reduce(loss_avg_scalar, op = ReduceOp.SUM) 
             loss_avg_scalar = loss_avg_scalar / dist.get_world_size() 
-            pplx_avg = math.exp(loss_avg_scalar.item()) 
+            pplx_avg = torch.exp(loss_avg_scalar).item()
             return loss_avg_scalar, pplx_avg
         elif self.parallel_type == 'fsdp':
             loss_avg_scalar = loss.mean() 
             dist.all_reduce(loss_avg_scalar, op=ReduceOp.SUM)
             loss_avg_scalar = loss_avg_scalar / dist.get_world_size()
-            pplx_avg = math.exp(loss_avg_scalar.item())
+            pplx_avg = torch.exp(loss_avg_scalar).item() 
             return loss_avg_scalar, pplx_avg
         
     def _get_model_state_dict(self):
        
         self.logger.info(f'[Rank {self._get_local_rank()}] Getting model state dict')    
         if self.parallel_type == 'ddp':
-            return self.model.module.state_dict()
+            state_dict = self.model.module.state_dict()
+            dist.barrier()
+            self.logger.info(f'[Rank {self._get_local_rank()}] Got model state dict')
+            return state_dict
         elif self.parallel_type == 'fsdp':
             with FSDP.state_dict_type(self.model, StateDictType.FULL_STATE_DICT):
-                return self.model.state_dict()
+                state_dict = self.model.state_dict()
+                dist.barrier()
+                self.logger.info(f'[Rank {self._get_local_rank()}] Got model state dict')
+                return state_dict
         else:
             if dist.get_rank() == 0:
                 return self.model.state_dict()
@@ -514,18 +538,24 @@ class Trainer:
     def _get_optim_state_dict(self):
         self.logger.info(f'[Rank {self._get_local_rank()}] Getting optimizer state dict')
         if self.parallel_type == 'fsdp':
-            return FSDP.optim_state_dict(self.model, self.optimizer, rank0_only=True)
+            state_dict = FSDP.full_optim_state_dict(self.model, self.optimizer, rank0_only=True) # hangs here btw.
+            dist.barrier()
+            self.logger.info(f'[Rank {self._get_local_rank()}] Got optimizer state dict')
+            return state_dict
         else:
-            return self.optimizer.state_dict()
+            state_dict = self.optimizer.state_dict()
+            dist.barrier()
+            self.logger.info(f'[Rank {self._get_local_rank()}] Got optimizer state dict')
+            return state_dict
 
     def _get_scheduler_state_dict(self):
-        with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
-            self.logger.info(f'[Rank {self._get_local_rank()}] Getting scheduler state dict')
+        self.logger.info(f'[Rank {self._get_local_rank()}] Getting scheduler state dict')
         if self.parallel_type in ['fsdp', 'ddp']:
-            if dist.get_rank() == 0:
-                return self.scheduler.state_dict()
-            return {}  
-        return self.scheduler.state_dict() 
+            state_dict = self.scheduler.state_dict() 
+            dist.barrier()
+            self.logger.info(f'[Rank {self._get_local_rank()}] Got scheduler state dict')
+            return state_dict
+        return {}  
     
     def _save_checkpoint(
         self,
@@ -538,106 +568,120 @@ class Trainer:
         ):
        
         # save_checkpoint_root_path originiates from the train_config.json as save_checkpoint_root_path
-        
-        with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
-            self.logger.info(f"[Rank {self._get_local_rank()}] Saving checkpoint at epoch {epoch} and global steps {global_steps}.")
 
-        if dist.get_rank() == 0:
-            root_path = os.path.join(self.save_checkpoint_path, f"RUN_{self.run_id}") # {save_checkpoint_root_path}/RUN_{self.run_id}
-            os.makedirs(root_path, exist_ok = True)
-            
-            torch.save(
+        root_path = os.path.join(self.save_checkpoint_path, f"RUN_{self.run_id}") # {save_checkpoint_root_path}/RUN_{self.run_id}
+        os.makedirs(root_path, exist_ok = True)
+      
+        self.logger.info(f"[Rank {self._get_local_rank()}] Saving checkpoint at epoch {epoch} and global steps {global_steps}.") 
+       
+        # save locally
+        torch.save(
                 {'epoch': epoch, 'global_steps': global_steps, 'model': model_state_dict,
                  'optim': optim_state_dict, 'scheduler_state_dict': scheduler_state_dict},
                 f = os.path.join(root_path, f'RUN_{self.run_id}_DATETIME_{self.run_start_date_time}_checkpoint_{epoch}_step_{steps}_global_steps_{global_steps}.pt')
             ) 
+           
+        self.logger.info(f"[Rank {self._get_local_rank()}] Saved checkpoint at epoch {epoch} and global steps {global_steps}.") 
+        
+        with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
+            self.logger.info(f"[Rank {self._get_local_rank()}] Saved checkpoint at epoch {epoch} and global steps {global_steps}.")
+        
+        if self.save_hf and self.hf_repo_exists:
+
+            self.logger.info(f"[Rank {self._get_local_rank()}] Saving checkpoint to hugging face at epoch {epoch} and global steps {global_steps}.")
+
+            with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
+                self.logger.info(f"[Rank {self._get_local_rank()}] Saving checkpoint to hugging face at epoch {epoch} and global steps {global_steps}.")
+
+            assert self.hf_repo_id is not None, ValueError('hf_repo_id must be specified')
+            assert self.hf_root_path is not None, ValueError('hf_root_path must be specified')
+            
+            api = HfApi()
+            
+            try: # save to hugging face
+                
+                self.logger.info(f"[Rank {self._get_local_rank()}] Saving checkpoint to hugging face at epoch {epoch} and global steps {global_steps}.")
+               
+                api.upload_file(
+                    path_or_fileobj = os.path.join(root_path, \
+                        f'RUN_{self.run_id}_DATETIME_{self.run_start_date_time}_checkpoint_{epoch}_step_{steps}_global_steps_{global_steps}.pt'),
+                    path_in_repo = os.path.join(self.hf_root_path, f'RUN_{self.run_id}', \
+                        f'RUN_{self.run_id}_DATETIME_{self.run_start_date_time}_checkpoint_{epoch}_step_{steps}_global_steps_{global_steps}.pt'),
+                    repo_id = self.hf_repo_id,
+                    repo_type = self.hf_repo_type if self.hf_repo_type else None,
+                )
+                
+                self.logger.info(f"[Rank {self._get_local_rank()}] Saved checkpoint to hugging face at epoch {epoch} and global steps {global_steps}.")
+            
+            except Exception as e:
+                
+                with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
+                    self.logger.error(f"[Rank {self._get_local_rank()}] Failed to upload checkpoint to hugging face: {e}")
+                    self.logger.error(f"[Rank {self._get_local_rank()}] Traceback: \n\n {traceback.format_exc()}")
+                    raise
+            
+            try: 
+                self.logger.info(f"[Rank {self._get_local_rank()}] Uploading config to hugging face at epoch {epoch} and global steps {global_steps}.")
+                api.upload_file(
+                    path_or_fileobj = os.path.join(root_path, f"RUN_{self.run_id}_DATETIME_{self.run_start_date_time}_CONFIG.json"),
+                    path_in_repo = os.path.join(self.hf_root_path, f"RUN_{self.run_id}", \
+                                                f"RUN_{self.run_id}_DATETIME_{self.run_start_date_time}_CONFIG.json"),
+                    repo_id = self.hf_repo_id,
+                    repo_type = self.hf_repo_type if self.hf_repo_type else None,
+                    token = os.environ['HF_TOKEN']
+                )
+                self.logger.info(f"[Rank {self._get_local_rank()}] Uploaded config to hugging face at epoch {epoch} and global steps {global_steps}.")
+            
+            except Exception as e:
+                with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
+                    self.logger.error(f"[Rank {self._get_local_rank()}] Failed to upload config to hugging face: {e}")
+                    self.logger.error(f"[Rank {self._get_local_rank()}] Traceback: \n\n {traceback.format_exc()}")
+                    raise 
+        
+            with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
+                self.logger.info(f"[Rank {self._get_local_rank()}] Saved checkpoint at epoch {epoch} and global steps {global_steps} to hugging face.")
+        
+        elif self.save_hf and not self.hf_repo_exists:
+            
+            self.logger.info(f"[Rank {self._get_local_rank()}] Creating hugging face repo at {self.hf_repo_id}") 
             
             with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
-                self.logger.info(f"[Rank {self._get_local_rank()}] Saved checkpoint at epoch {epoch} and global steps {global_steps}.")
-           
-            if self.save_hf and self.hf_repo_exists:
-   
-                with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
-                    self.logger.info(f"[Rank {self._get_local_rank()}] Saving checkpoint to hugging face at epoch {epoch} and global steps {global_steps}.")
-    
-                assert self.hf_repo_id is not None, ValueError('hf_repo_id must be specified')
-                assert self.hf_root_path is not None, ValueError('hf_root_path must be specified')
-               
-                api = HfApi()
-                
-                try:
-                    api.upload_file(
-                        path_or_fileobj = os.path.join(root_path, \
-                            f'RUN_{self.run_id}_DATETIME_{self.run_start_date_time}_checkpoint_{epoch}_global_steps_{global_steps}.pt'),
-                        path_in_repo = os.path.join(self.hf_root_path, f'RUN_{self.run_id}', \
-                            f'RUN_{self.run_id}_DATETIME_{self.run_start_date_time}_checkpoint_{epoch}_global_steps_{global_steps}.pt'),
-                        repo_id = self.hf_repo_id,
-                        repo_type = self.hf_repo_type if self.hf_repo_type else None,
-                    )
-                
-                except Exception as e:
-                   
-                    with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
-                        self.logger.error(f"[Rank {self._get_local_rank()}] Failed to upload checkpoint to hugging face: {e}")
-                        self.logger.error(f"[Rank {self._get_local_rank()}] Traceback: \n\n {traceback.format_exc()}")
-                        raise
-               
-                try: 
-                    api.upload_file(
-                        path_or_fileobj = os.path.join(root_path, f"RUN_{self.run_id}_DATETIME_{self.run_start_date_time}_CONFIG.json"),
-                        path_in_repo = os.path.join(self.hf_root_path, f"RUN_{self.run_id}", \
-                                                    f"RUN_{self.run_id}_DATETIME_{self.run_start_date_time}_CONFIG.json"),
-                        repo_id = self.hf_repo_id,
-                        repo_type = self.hf_repo_type if self.hf_repo_type else None,
-                        token = os.environ['HF_TOKEN']
-                    )
-                
-                except Exception as e:
-                    with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
-                        self.logger.error(f"[Rank {self._get_local_rank()}] Failed to upload config to hugging face: {e}")
-                        self.logger.error(f"[Rank {self._get_local_rank()}] Traceback: \n\n {traceback.format_exc()}")
-                        raise 
-           
-                with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
-                    self.logger.info(f"[Rank {self._get_local_rank()}] Saved checkpoint at epoch {epoch} and global steps {global_steps} to hugging face.")
-           
-            elif self.save_hf and not self.hf_repo_exists:
+                self.logger.info(f"[Rank {self._get_local_rank()}] Creating hugging face repo at {self.hf_repo_id}") 
+        
+            assert self.hf_repo_id is not None, ValueError('hf_repo_id must be specified')
+            assert self.hf_root_path is not None, ValueError('hf_root_path must be specified')
+            
+            try:
                 
                 with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
                     self.logger.info(f"[Rank {self._get_local_rank()}] Creating hugging face repo at {self.hf_repo_id}") 
-          
-                assert self.hf_repo_id is not None, ValueError('hf_repo_id must be specified')
-                assert self.hf_root_path is not None, ValueError('hf_root_path must be specified')
-               
-                try:
-                    
-                    with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
-                        self.logger.info(f"[Rank {self._get_local_rank()}] Creating hugging face repo at {self.hf_repo_id}") 
-                    create_repo(
-                        repo_id = self.hf_repo_id,
-                        repo_type = self.hf_repo_type if self.hf_repo_type else None,
-                        token = os.environ['HF_TOKEN']
-                    )
-                
-                except Exception as e:
-                    with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
-                        self.logger.error(f"[Rank {self._get_local_rank()}] Failed to create hugging face repo: {e}")
-                        self.logger.error(f"[Rank {self._get_local_rank()}] Traceback: \n\n {traceback.format_exc()}")
-                        raise
-           
-                with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
-                    self.logger.info(f"[Rank {self._get_local_rank()}] Created hugging face repo at {self.hf_repo_id}")
-                
-                self.hf_repo_exists = True 
-                
-                self._save_checkpoint(
-                    model_state_dict = model_state_dict,
-                    optim_state_dict = optim_state_dict,
-                    scheduler_state_dict = scheduler_state_dict,
-                    epoch = epoch,
-                    steps = steps,
-                    global_steps = global_steps
+                create_repo(
+                    repo_id = self.hf_repo_id,
+                    repo_type = self.hf_repo_type if self.hf_repo_type else None,
+                    token = os.environ['HF_TOKEN']
                 )
+            
+                self.logger.info(f"[Rank {self._get_local_rank()}] Created hugging face repo at {self.hf_repo_id}") 
+            
+            except Exception as e:
+                with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
+                    self.logger.error(f"[Rank {self._get_local_rank()}] Failed to create hugging face repo: {e}")
+                    self.logger.error(f"[Rank {self._get_local_rank()}] Traceback: \n\n {traceback.format_exc()}")
+                    raise
+        
+            with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
+                self.logger.info(f"[Rank {self._get_local_rank()}] Created hugging face repo at {self.hf_repo_id}")
+            
+            self.hf_repo_exists = True 
+            
+            self._save_checkpoint(
+                model_state_dict = model_state_dict,
+                optim_state_dict = optim_state_dict,
+                scheduler_state_dict = scheduler_state_dict,
+                epoch = epoch,
+                steps = steps,
+                global_steps = global_steps
+            )
           
     def _get_mixed_precision_dtype(self, mixed_precision_dtype=None):
       
@@ -652,25 +696,18 @@ class Trainer:
     def _clr_mem(self, gc_ = False, cuda_clr_cache = True, *args, **kwargs):
         
         if gc_:
-            with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
-                self.logger.info(f'[Rank {self._get_local_rank()}] Collecting garbage.')
+            self.logger.info(f'[Rank {self._get_local_rank()}] Collecting garbage.')
             gc.collect() 
         if cuda_clr_cache:
-            with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
-                self.logger.info(f'[Rank {self._get_local_rank()}] Clearing cuda cache.')
+            self.logger.info(f'[Rank {self._get_local_rank()}] Clearing cuda cache.')
             torch.cuda.empty_cache()
         for i in args:
-            with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
-                self.logger.info(f'[Rank {self._get_local_rank()}] Deleting {i}')
             del i
-        for key in kwargs:
-            with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
-                self.logger.info(f'[Rank {self._get_local_rank()}] Deleting {key}')
+        for key in list(kwargs.keys()):
             del kwargs[key] 
            
     def _get_val_dataloader(self):
-        with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
-            self.logger.info(f'[Rank {self._get_local_rank()}] Loading validation data.') 
+        self.logger.info(f'[Rank {self._get_local_rank()}] Loading validation data.') 
         X_val, y_val = get_data(self.val_data_root_path)
         
         val_dataloader = get_dataloader(
@@ -695,8 +732,6 @@ class Trainer:
 
             wandb_config_dict = asdict(self.wandb_config)
             del wandb_config_dict['extra_args']
-
-            print(f"WANDB_CONFIG_DICT: {wandb_config_dict}")
 
             wandb.init(
                 **wandb_config_dict
@@ -788,29 +823,33 @@ class Trainer:
             return date_time
 
     def get_scheduler(self, optimizer, warmup_steps, constant_steps, decay_steps, max_lr, min_lr, *args, **kwargs):
-        if not min_lr <= self.optimizer_config.lr <= max_lr:
-            
-            with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
-                self.logger.warning(f"[Rank {self._get_local_rank()}] min_lr {min_lr} is not between optimizer's initial_lr "
-                     f"{self.optimizer_config.lr} and max_lr {max_lr}")
-    
+        base_lr = optimizer.defaults["lr"]
+
+        if not min_lr <= base_lr <= max_lr:
+            with supress_logging(logger=self.logger, disable=self.disable, disable_exclude=self.disable_exclude):
+                self.logger.warning(
+                    f"[Rank {self._get_local_rank()}] base_lr {base_lr} is not between min_lr {min_lr} and max_lr {max_lr}"
+                )
+
         cycle_length = warmup_steps + constant_steps + decay_steps
-    
+
         def lr_lambda(step):
             step_in_cycle = step % cycle_length
-        
+
             if step_in_cycle < warmup_steps:
-                return min_lr + (max_lr - min_lr) * (step_in_cycle / warmup_steps)
-        
+                lr = min_lr + (max_lr - min_lr) * (step_in_cycle / warmup_steps)
+
             elif step_in_cycle < warmup_steps + constant_steps:
-                return max_lr
-        
+                lr = max_lr
+
             else:
                 decay_step = step_in_cycle - (warmup_steps + constant_steps)
                 progress = decay_step / decay_steps
                 decay = 0.5 * (1 + math.cos(math.pi * progress))
-                return min_lr + (max_lr - min_lr) * decay
-            
+                lr = min_lr + (max_lr - min_lr) * decay
+
+            return lr / base_lr
+
         return LambdaLR(optimizer, lr_lambda)
 
     def _get_local_rank(self):

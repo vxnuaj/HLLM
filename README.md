@@ -63,17 +63,20 @@ This repository contains code for building, profiling, and training a variant of
   - [X] turn logger to logging on a single dist | or at option for it on parameters.
     - [ ] DDP 
       - [X] Fix the all reduce
-      - [ ] Fix Progress Bar 
-      - [ ] Are epochs set right...?
-    - [ ] FSDP
-  - [ ] Verify that the model is saving checkpoints locally.
-  - [ ] Verify that the model is saving logs locally.
-  - [ ] Verify that the model is uploading checkpoints to hugging face.
-  - [ ] Verify that the checkpoints are proeprly saved (reusable).
-  - [ ] Verify that the model is uploading dataset to hugging face.
-  - [ ] Verify that the model is logging to wandb.
+      - [X] Fix Progress Bar 
+      - [X] Are epochs set right...?
+    - [X] FSDP
+  - [X] Verify model is learning
+  - [X] Verify that the model is saving checkpoints locally.
+  - [ ] Verify that the checkpoints are properly saved (reusable).
+  - [X] Verify that the model is saving logs locally.
+  - [X] Verify that the model is uploading checkpoints to hugging face.
+  - [X] Verify that the model is uploading dataset to hugging face.
+  - [X] Verify that the model is logging to wandb.
+  - [ ] dont want logs to interrupt progress bar, but want to be saved to the .log file.
 
 - [ ] Prep for Pre-Training
+
   - [ ] Batch Size - Stress test VRAM to proper batch size for the dataloader_config.json
   - [ ] Figure out final hyperparameters for the LR Schedule based on batch size.
 
