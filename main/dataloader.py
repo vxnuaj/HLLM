@@ -1,9 +1,11 @@
 import torch
-import torch.distributed as dist
 import os
-import warnings
+import math
+import random
+import numpy
 
 from torch.utils.data import Dataset, DataLoader, DistributedSampler, SequentialSampler
+from train_utils import Trainer
 
 class TinyStoriesDataset(Dataset):
     def __init__(self, X, y, context_length=512):
@@ -139,11 +141,13 @@ def get_dataloader(
     if parallelism_type in _val_distributed:
         if rank is None:
             raise ValueError("Rank must be provided for DDP/FSDP")
+
         sampler = DistributedSampler(
             dataset,
             rank=rank,
             shuffle=shuffle
         )
+        
     else:
         sampler = SequentialSampler(dataset)
 

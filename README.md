@@ -61,7 +61,7 @@ This repository contains code for building, profiling, and training a variant of
   - [X] Tokenizer a small set of samples.
     -[X] Verify that we'll be using the 0th index for ignore_index in the loss.
   - [X] turn logger to logging on a single dist | or at option for it on parameters.
-    - [ ] DDP 
+    - [X] DDP 
       - [X] Fix the all reduce
       - [X] Fix Progress Bar 
       - [X] Are epochs set right...?
@@ -69,6 +69,7 @@ This repository contains code for building, profiling, and training a variant of
   - [X] Verify model is learning
   - [X] Verify that the model is saving checkpoints locally.
   - [ ] Verify that the checkpoints are properly saved (reusable).
+  - [ ] Make sure, given same exact configuration, we're starting off from the samep point in the dataset ( properly best to save a seed in the dataloader and input to torch.save )
   - [X] Verify that the model is saving logs locally.
   - [X] Verify that the model is uploading checkpoints to hugging face.
   - [X] Verify that the model is uploading dataset to hugging face.

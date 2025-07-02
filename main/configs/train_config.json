@@ -26,5 +26,7 @@
         "hf_repo_id": "tiny-research/athena",
         "hf_repo_type": "model",
         "hf_root_path": "ATHENA_V1_TINY_39.7M/checkpoints"
-    }
+    },
+    "load_checkpoint": true,
+    "load_checkpoint_path": "main/checkpoints/RUN_1_DATETIME_2025-06-29_19-55-25/checkpoint_1.pt"
 }

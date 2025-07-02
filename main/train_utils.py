@@ -2,7 +2,9 @@ import torch
 import torch.nn as nn
 import torch.optim as opt
 import torch.distributed as dist
+import numpy as np
 
+import rand
 import logging
 import json
 import math
@@ -54,7 +56,7 @@ class Trainer:
         debug:bool = False,
         debug_level:str = 'INFO'
         ):
-   
+
         if debug:
             os.environ['NCCL_DEBUG'] = debug_level
     
@@ -88,11 +90,10 @@ class Trainer:
         self.mixed_precision = self.train_config.mixed_precision
         self.mixed_precision_dtype = self._get_mixed_precision_dtype(self.train_config.mixed_precision_dtype) if self.train_config.mixed_precision else None
         self.max_grad_norm = self.train_config.max_grad_norm
-        
+         
         track_grad_norm_state = self.train_config.track_grad_norm 
         self.track_grad_norm = self.train_config.track_grad_norm if self.train_config.wandb else False
         
-       
         self.parallel_type = self.train_config.parallel_type
         self.val_batch_size = self.val_dataloader_config['val_batch_size']
         self.val_num_workers = self.val_dataloader_config['val_num_workers']
@@ -104,6 +105,8 @@ class Trainer:
         self.wandb_ = self.train_config.wandb 
         self._compile = self.train_config._compile
         self._compile_warmup_steps = self.train_config._compile_warmup_steps
+        self.load_checkpoint = self.train_config.load_checkpoint
+        self.load_checkpoint_path = self.train_config.load_checkpoint_path
         self.log_level = self.train_config.log_level
         self.log_root_path = self.train_config.log_root_path if hasattr(self.train_config, 'log_root_path') else None
         self.fsdp_wrap_policy = self.train_config.fsdp_wrap_policy
@@ -142,7 +145,7 @@ class Trainer:
             print(colored_art, flush=True)
         
         self.device = self._get_device()
-        
+       
         self.model = self._get_model(asdict(self.model_config))
 
         criterion_config_dict = asdict(self.criterion_config)
@@ -156,6 +159,10 @@ class Trainer:
         self.criterion = nn.CrossEntropyLoss(**criterion_config_dict)
         self.optimizer = opt.AdamW(self.model.parameters(), **optimizer_config_dict)
         self.scheduler = self.get_scheduler(self.optimizer, **scheduler_config_dict)
+    
+        if self.load_checkpoint:  # TODO : make sure we continue based off of the checkpoint epoch, global step, and local steps
+            self._chk_cont_epoch, self._chk_cont_global_step, self._chk_cont_local_steps = \
+                self._load_checkpoint(self.load_checkpoint_path) 
      
         self.run_id = self.get_run_id()
         
@@ -214,7 +221,16 @@ class Trainer:
                 self._init_wandb() 
             
             self._check_device_warn()
-            global_steps = 0 
+            
+            # Initialize global steps and starting epoch from checkpoint if available
+            if hasattr(self, '_chk_cont_global_step'):
+                global_steps = self._chk_cont_global_step
+                start_epoch = self._chk_cont_epoch
+                self.logger.info(f"[Rank {self._get_local_rank()}] Resuming training from epoch {start_epoch + 1}, global step {global_steps}")
+            else:
+                global_steps = 0
+                start_epoch = 0
+            
             X, y = get_data(self.train_data_root_path)
             
             self.dataloader = get_dataloader(
@@ -225,32 +241,48 @@ class Trainer:
                 batch_size=self.train_dataloader_config['train_batch_size'], 
                 num_workers=self.train_dataloader_config['train_num_workers'], 
                 shuffle=self.train_dataloader_config['train_shuffle'], 
-                pin_memory=self.train_dataloader_config['train_pin_memory']
+                pin_memory=self.train_dataloader_config['train_pin_memory'],
                 )
            
             self._check_dataloader_sampler()      
             self.logger.info(f"[GLOBAL] Training {len(self.dataloader) * int(dist.get_world_size())} batches per epoch over all RANKS.")
             self.logger.info(f"[GLOBAL] Training {len(self.dataloader) * self.context_length * int(dist.get_world_size())} tokens per \
                              epoch over all RANKS.")
-            self.logger.info(f"[GLOBAL] Training {len(self.dataloader) * self.context_length * int(dist.get_world_size()) * self.epochs} \
-                             tokens over all epochs over all RANKS.")             
+            self.logger.info(f"[GLOBAL] Training {len(self.dataloader) * self.context_length * int(dist.get_world_size()) * (self.epochs - start_epoch)} \
+                             tokens over remaining epochs over all RANKS.")             
             
             self.logger.info(f"[Rank {self._get_local_rank()}] Training {len(self.dataloader)} batches per epoch.\n")
             self.logger.info(f"[Rank {self._get_local_rank()}] Training {len(self.dataloader) * self.context_length} tokens per epoch.")
-            self.logger.info(f"[Rank {self._get_local_rank()}] Training {len(self.dataloader) * self.context_length * self.epochs} tokens over all epochs.")
+            self.logger.info(f"[Rank {self._get_local_rank()}] Training {len(self.dataloader) * self.context_length * (self.epochs - start_epoch)} tokens over remaining epochs.")
             
-            for epoch in range(self.epochs):
-                
+            # Initialize iterator and skip steps if resuming from checkpoint
+            dataloader_iter = enumerate(self.dataloader)
+            if hasattr(self, '_chk_cont_local_steps') and self._chk_cont_local_steps > 0:
+                # Skip to the step where we left off
+                for _ in range(self._chk_cont_local_steps + 1):
+                    next(dataloader_iter)
+            
+            for epoch in range(start_epoch, self.epochs):
                 progress_bar = tqdm(
-                    enumerate(self.dataloader),
+                    dataloader_iter,
+                    initial=self._chk_cont_local_steps if hasattr(self, '_chk_cont_local_steps') and epoch == start_epoch else 0,
                     desc=f"Epoch {epoch + 1}/{self.epochs} | Loss: - | PPLX: - | LR: - | Time: -",
                     total=len(self.dataloader),
                     disable=(dist.get_rank()!=0 and self.parallel_type in ['fsdp', 'ddp']),
                     ascii = False
                 )
                 
+                # Reset local steps counter for the current epoch
+                if hasattr(self, '_chk_cont_local_steps') and epoch == start_epoch:
+                    local_steps = self._chk_cont_local_steps
+                    # Clear the checkpoint steps after using them
+                    del self._chk_cont_local_steps
+                else:
+                    local_steps = 0
+                
                 for i, (X, y) in progress_bar:
                     X, y = X.to(self.device, non_blocking=True), y.to(self.device, non_blocking=True)
+                    local_steps += 1
                     
                     if self.mixed_precision:
                         with autocast(device_type='cuda', dtype=self.mixed_precision_dtype()):
@@ -304,7 +336,7 @@ class Trainer:
                         if self.track_grad_norm:
                             wandb_dict.update(grad_norm_dict)
                             
-                        wandb.log(wandb_dict)  
+                        wandb.log(wandb_dict, step=global_steps)  
                    
                     if global_steps % self.checkpoint_steps == 0:
                         dist.barrier() 
@@ -313,19 +345,18 @@ class Trainer:
                        
                         model_state_dict = self._get_model_state_dict()
                         optim_state_dict = self._get_optim_state_dict() 
-                        scheduler_state_dict = self._get_scheduler_state_dict() # hangs here now                       
+                        scheduler_state_dict = self._get_scheduler_state_dict()                       
                         
                         if is_main_rank:
-                            
                             self._save_checkpoint(
                                     model_state_dict = model_state_dict,
                                     optim_state_dict = optim_state_dict,
                                     scheduler_state_dict = scheduler_state_dict,
                                     epoch = epoch,
-                                    steps = i + 1,
+                                    steps = local_steps,
                                     global_steps = global_steps,
                                 ) 
-                  
+                      
                         dist.barrier() 
                    
                     if self.val_steps and (global_steps % self.val_steps == 0):
@@ -365,11 +396,11 @@ class Trainer:
                         val_loss = loss_accum / val_steps
                         val_pplx = pplx_accum / val_steps
 
-                        if self.wandb_:
+                        if self.wandb_ and is_main_rank:
                             wandb.log({
-                                "val loss": val_loss,
-                                "val perplexity": val_pplx
-                            })
+                                "val_loss": val_loss,
+                                "val_perplexity": val_pplx
+                            }, step=global_steps)  
                    
                         self._clr_mem(
                             gc_ = True, 
@@ -381,6 +412,9 @@ class Trainer:
                         ) 
                         
                         self.model.train()
+                
+                # Reset the iterator for the next epoch
+                dataloader_iter = enumerate(self.dataloader)
 
             self._cleanup()
             self.cleanup()
@@ -576,7 +610,7 @@ class Trainer:
        
         # save locally
         torch.save(
-                {'epoch': epoch, 'global_steps': global_steps, 'model': model_state_dict,
+                {'epoch': epoch, 'global_steps': global_steps, 'local_steps': steps, 'model': model_state_dict,
                  'optim': optim_state_dict, 'scheduler_state_dict': scheduler_state_dict},
                 f = os.path.join(root_path, f'RUN_{self.run_id}_DATETIME_{self.run_start_date_time}_checkpoint_{epoch}_step_{steps}_global_steps_{global_steps}.pt')
             ) 
@@ -718,7 +752,7 @@ class Trainer:
             shuffle = self.val_shuffle,
             pin_memory = self.val_pin_memory,
             parallelism_type = self.parallel_type,
-            rank = dist.get_rank()
+            rank = dist.get_rank(),
         ) 
         
         return val_dataloader
@@ -855,7 +889,7 @@ class Trainer:
     def _get_local_rank(self):
         if dist.is_initialized():
             return int(os.environ.get('LOCAL_RANK', 0))
-        return 0  # Default to 0 if not initialized
+        return 0  # to default to 0 if not initialized
 
     def get_run_id(self):
 
@@ -874,6 +908,16 @@ class Trainer:
         print(f"Rank {rank} received Run ID: {input_list[0]}")
         
         return input_list[0]
+
+    def _load_checkpoint(self, checkpoint_path): # TODO - ¿¿¿ dist ???
+
+        checkpoint = torch.load(checkpoint_path, map_location='cpu')
+        
+        self.model.load_state_dict(checkpoint['model'])
+        self.optimizer.load_state_dict(checkpoint['optimizer'])
+        self.scheduler.load_state_dict(checkpoint['scheduler'])
+        
+        return checkpoint['epoch'], checkpoint['global_step'], checkpoint['local_steps']
 
 @contextmanager
 def supress_logging(logger, disable=None, disable_exclude=None):
