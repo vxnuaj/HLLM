@@ -1,8 +1,8 @@
 import torch
+
 import torch.nn as nn
 import torch.optim as opt
 import torch.distributed as dist
-
 import logging
 import json
 import math
@@ -13,8 +13,14 @@ import sys
 import functools
 import traceback
 import wandb
+import threading
 import signal
+import rich.logging
+import pyfiglet
+import termcolor
+import huggingface_hub
 
+from io import StringIO
 from dataclasses import asdict
 from dataloader import get_data
 from config import ModelConfig, CriterionConfig, DataloaderConfig, OptimizerConfig, SchedulerConfig, TrainingConfig, WandbConfig
@@ -51,16 +57,11 @@ class Trainer:
         scheduler_config:dict,
         wandb_config:dict,
         train_config:dict,
-        debug:bool = False,
-        debug_level:str = 'INFO'
+        debug_nccl:bool = False,
+        debug_level:str = 'INFO',
+        debug_subsys:bool = False 
         ):
-
-        if debug:
-            os.environ['NCCL_DEBUG'] = debug_level
-    
-        assert torch.cuda.is_available(), ValueError("No CUDA device found")
-        torch.cuda.set_device(f"cuda:{os.environ.get('LOCAL_RANK')}")
-     
+       
         self.model_config = ModelConfig(**model_config)
         self.criterion_config = CriterionConfig(**criterion_config)
         self.optimizer_config = OptimizerConfig(**optimizer_config)
@@ -69,6 +70,62 @@ class Trainer:
         self.wandb_config = WandbConfig(**wandb_config)
         self.train_config = TrainingConfig(**train_config)
       
+        self.run_id = self.get_run_id()
+        
+        self.log_level = self.train_config.log_level
+        self.log_root_path = self.train_config.log_root_path if hasattr(self.train_config, 'log_root_path') else None
+ 
+        # Capture original stderr **before** setup_logger() installs TeeHandler so that
+        # the NCCL tail thread can write to the genuine terminal stream without
+        # duplicating messages into the main training log file.
+        self._original_stderr = sys.__stderr__
+        
+        self.logger = logging.getLogger(__name__)
+        self.run_start_date_time = self.setup_logger(log_level=self.log_level, \
+                                                     log_root_path=self.log_root_path, return_date_time = True)
+        
+        self._log_file_path = getattr(self, "_log_file_path", None)
+        self._nccl_log_file_path = None
+        
+        if debug_nccl or debug_subsys:
+            if debug_nccl:
+                os.environ['NCCL_DEBUG'] = debug_level
+            if debug_subsys:
+                os.environ['NCCL_DEBUG_SUBSYS'] = 'ALL'
+            
+            # Only set up NCCL logging on rank 0 to avoid duplicate logs
+            if not dist.is_initialized() or dist.get_rank() == 0:
+                if self._log_file_path:
+                    root, ext = os.path.splitext(self._log_file_path)
+                    self._nccl_log_file_path = root + "_nccl" + ext
+                    nccl_dir = os.path.dirname(self._nccl_log_file_path)
+                    os.makedirs(nccl_dir, exist_ok=True)
+                    try:
+                        with open(self._nccl_log_file_path, "a") as _:
+                            pass
+                    except OSError as err:
+                        self.logger.warning(f"[Rank {self._get_local_rank()}] Could not create NCCL log file {self._nccl_log_file_path}: {err}")
+                        self._nccl_log_file_path = None
+                    else:
+                        self.logger.debug(f"[Rank {self._get_local_rank()}] Created NCCL log file at {self._nccl_log_file_path}")
+                
+                # Only set NCCL_DEBUG_FILE if we have a valid log file path
+                if hasattr(self, '_nccl_log_file_path') and self._nccl_log_file_path:
+                    os.environ['NCCL_DEBUG_FILE'] = self._nccl_log_file_path
+                    self.logger.info(f"[Rank {self._get_local_rank()}] NCCL debug output will be saved to {self._nccl_log_file_path}")
+                    # Start tailing the log file to show in terminal
+                    self._start_nccl_tail()
+                else:
+                    # Fallback to stderr if no log file could be created
+                    os.environ['NCCL_DEBUG_FILE'] = '/proc/self/fd/2'
+                    self.logger.warning("Falling back to stderr for NCCL logging")
+            else:
+                # On other ranks, disable NCCL debug output to avoid duplicate logs
+                os.environ['NCCL_DEBUG'] = 'WARN'
+                os.environ['NCCL_DEBUG_SUBSYS'] = 'NONE'
+    
+        assert torch.cuda.is_available(), ValueError("No CUDA device found")
+     
         self.train_dataloader_config = self.dataloader_config.train_dataloader_config 
         self.val_dataloader_config = self.dataloader_config.val_dataloader_config 
        
@@ -105,18 +162,12 @@ class Trainer:
         self._compile_warmup_steps = self.train_config._compile_warmup_steps
         self.load_checkpoint = self.train_config.load_checkpoint
         self.load_checkpoint_path = self.train_config.load_checkpoint_path
-        self.log_level = self.train_config.log_level
-        self.log_root_path = self.train_config.log_root_path if hasattr(self.train_config, 'log_root_path') else None
         self.fsdp_wrap_policy = self.train_config.fsdp_wrap_policy
         self.model_name = self.model_config.model_name
         self.model_series_name = self.model_config.model_series_name
 
         self.disable = self.train_config.disable
         self.disable_exclude = self.train_config.disable_exclude
-
-        self.logger = logging.getLogger(__name__)      
-        date_time = self.setup_logger(log_level=self.log_level, log_root_path=self.log_root_path, return_date_time = True)
-        self.run_start_date_time = date_time
 
         if track_grad_norm_state != self.track_grad_norm:
             self.logger.warning("Gradient norm tracking is disabled because wandb is not enabled")
@@ -166,7 +217,6 @@ class Trainer:
         if self.load_checkpoint_path is not None and not self.load_checkpoint:
             self.logger.warning("load_checkpoint_path is specified but load_checkpoint is False, will not start from checkpoint")
               
-        self.run_id = self.get_run_id()
         
         if self.wandb_:
             self.logger.info(f"[Rank {self._get_local_rank()}] Logging to wandb project {self.wandb_config.project} as {self.wandb_config.name}_RUN_{self.run_id}")
@@ -177,8 +227,7 @@ class Trainer:
 
         self.logger.setLevel(self.log_level)
         
-        with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude):
-            self.logger.info(f"[Rank {self._get_local_rank()}] Initializing {self.model_name.upper()}") 
+        self.logger.info(f"[Rank {self._get_local_rank()}] Initializing {self.model_name.upper()}") 
        
         os.makedirs(os.path.join(self.save_checkpoint_path, f"RUN_{self.run_id}"), exist_ok = True) 
            
@@ -255,9 +304,13 @@ class Trainer:
 
             if os.name == 'nt':
                 os.system('cls')
+                os.unsetenv('NCCL_DEBUG') 
+                os.unsetenv('NCCL_DEBUG_SUBSYS')
             else:
                 os.system('clear')
-          
+                os.unsetenv('NCCL_DEBUG') 
+                os.unsetenv('NCCL_DEBUG_SUBSYS')         
+                
             self._ascii_art_model_name() 
            
             dataloader_iter = enumerate(self.dataloader)
@@ -507,8 +560,7 @@ class Trainer:
     def _check_device_warn(self):
         if self.device.type == 'cpu':
             
-            with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude):
-                self.logger.warning(f'[Rank {self._get_local_rank()}] Training on CPU')
+            self.logger.warning(f'[Rank {self._get_local_rank()}] Training on CPU')
             
             cont = input('Continue [y/n]?')
             if cont.lower() == 'n':
@@ -517,25 +569,43 @@ class Trainer:
     def _setup_parallel(self):
         if not dist.is_initialized():
             try:
-                dist.init_process_group(backend='nccl', init_method='env://')
+                local_rank = int(os.environ['LOCAL_RANK'])  # fail if missing
+                rank = int(os.environ['RANK'])
+                world_size = int(os.environ['WORLD_SIZE'])
+            except KeyError as e:
+                raise RuntimeError(
+                    f"Missing required environment variable: {str(e)}. "
+                    "Make sure you're launching with torchrun."
+                )
+
+            torch.cuda.set_device(local_rank)
+            self.device = torch.device(f'cuda:{local_rank}')
+
+            try:
+                dist.init_process_group(
+                    backend='nccl',
+                    init_method='env://',
+                    rank=rank,
+                    world_size=world_size,
+                )
+                self.logger.info(f"[Rank {rank}] Successfully initialized process group on GPU {local_rank}")
             except Exception as e:
+                self.logger.error(f"[Rank {rank}] Error initializing process group: {str(e)}")
                 raise RuntimeError(
                     f"Error initializing distributed training: {str(e)}\n"
                     "Make sure you're running with torchrun and have set all required environment variables."
                 )
-        
-        local_rank = int(os.environ.get('LOCAL_RANK', 0))
-        torch.cuda.set_device(local_rank)
     
     def _cleanup(self):
         
-        with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
-            self.logger.info(f"[Rank {self._get_local_rank()}] Cleaning up Distributed Process Group") 
+        self.logger.info(f"[Rank {self._get_local_rank()}] Cleaning up Distributed Process Group") 
         dist.destroy_process_group()
         
     def _get_device(self):
-        device = torch.device(f"cuda:{int(os.environ['LOCAL_RANK'])}") if torch.cuda.is_available() else torch.device('cpu')
-        return device
+        if dist.is_initialized():
+            local_rank = int(os.environ.get('LOCAL_RANK', 0))
+            return torch.device(f"cuda:{local_rank}")
+        return torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
         
     def _check_dataloader_sampler(self):
         if self.parallel_type in ['fsdp', 'ddp']:
@@ -544,48 +614,42 @@ class Trainer:
                                  the dataloader must DistributedSampler')
             
     def _get_model(self, model_config):
-        with supress_logging(logger=self.logger, disable=self.disable, disable_exclude=self.disable_exclude):
-            self.logger.info(f"[Rank {self._get_local_rank()}] Initializing Model")
+        self.logger.info(f"[Rank {self._get_local_rank()}] Initializing Model")
         model = LLaMA(**model_config)
 
         if self._compile:
-            with supress_logging(logger=self.logger, disable=self.disable, disable_exclude=self.disable_exclude):
-                self.logger.info(f"[Rank {self._get_local_rank()}] Compiling Model")
+            self.logger.info(f"[Rank {self._get_local_rank()}] Compiling Model")
             model = torch.compile(model)
-
-        local_rank = int(os.environ.get('LOCAL_RANK', 0))
-        torch.cuda.set_device(local_rank)
-        self.device = torch.device(f"cuda:{local_rank}")
 
         if self.parallel_type == 'ddp':
             
-            self.logger.info(f"[Rank {self._get_local_rank()}] Wrapping model with DDP at rank {local_rank}") 
-            model = model.cuda(local_rank)
-            model = DDP(model, device_ids=[local_rank], output_device=local_rank)
-            self.logger.info(f"[Rank {self._get_local_rank()}] Successfully wrapped model in DDP at rank {local_rank}")
+            self.logger.info(f"[Rank {self._get_local_rank()}] Wrapping model with DDP at rank {int(os.environ.get('LOCAL_RANK', 0))}") 
+            model = model.cuda(int(os.environ.get('LOCAL_RANK', 0)))
+            model = DDP(model, device_ids=[int(os.environ.get('LOCAL_RANK', 0))], output_device=int(os.environ.get('LOCAL_RANK', 0)))
+            self.logger.info(f"[Rank {self._get_local_rank()}] Successfully wrapped model in DDP at rank {int(os.environ.get('LOCAL_RANK', 0))}")
             return model
 
         elif self.parallel_type == 'fsdp':
-            self.logger.info(f"[Rank {self._get_local_rank()}] Wrapping model with FSDP at rank {local_rank}")
-            model = model.cuda(local_rank)
+            self.logger.info(f"[Rank {self._get_local_rank()}] Wrapping model with FSDP at rank {int(os.environ.get('LOCAL_RANK', 0))}")
+            model = model.cuda(int(os.environ.get('LOCAL_RANK', 0)))
 
             if self.fsdp_wrap_policy == 'transformer':
-                self.logger.info(f"[Rank {self._get_local_rank()}] Initializing FSDP with transformer policy at rank {local_rank}")
+                self.logger.info(f"[Rank {self._get_local_rank()}] Initializing FSDP with transformer policy at rank {int(os.environ.get('LOCAL_RANK', 0))}")
                 auto_wrap = functools.partial(
                     transformer_auto_wrap_policy,
                     transformer_layer_cls={TransformerBlock,},
                 )
-                model = FSDP(model, device_id=local_rank, auto_wrap_policy=auto_wrap)
+                model = FSDP(model, device_id=int(os.environ.get('LOCAL_RANK', 0)), auto_wrap_policy=auto_wrap)
             else:
-                self.logger.info(f"[Rank {self._get_local_rank()}] Initializing FSDP with auto policy at rank {local_rank}")
-                model = FSDP(model, device_id=local_rank)
+                self.logger.info(f"[Rank {self._get_local_rank()}] Initializing FSDP with auto policy at rank {int(os.environ.get('LOCAL_RANK', 0))}")
+                model = FSDP(model, device_id=int(os.environ.get('LOCAL_RANK', 0)))
 
-            self.logger.info(f"[Rank {self._get_local_rank()}] Successfully wrapped model in FSDP at rank {local_rank}")
+            self.logger.info(f"[Rank {self._get_local_rank()}] Successfully wrapped model in FSDP at rank {int(os.environ.get('LOCAL_RANK', 0))}")
             return model
 
         else:
             self.logger.info(f"[Rank {self._get_local_rank()}] Not using parallelism")
-            return model.cuda(local_rank)
+            return model.cuda(int(os.environ.get('LOCAL_RANK', 0)))
             
     def _get_avg_rank_loss_pplx(self, loss):
         if self.parallel_type == 'ddp':
@@ -654,7 +718,7 @@ class Trainer:
         # save_checkpoint_root_path originiates from the train_config.json as save_checkpoint_root_path
 
         root_path = os.path.join(self.save_checkpoint_path, f"RUN_{self.run_id}") # {save_checkpoint_root_path}/RUN_{self.run_id}
-        os.makedirs(root_path, exist_ok = True)
+        os.makedirs(root_path, exist_ok=True)
       
         self.logger.info(f"[Rank {self._get_local_rank()}] Saving checkpoint at epoch {epoch} and global steps {global_steps}.") 
        
@@ -666,15 +730,13 @@ class Trainer:
            
         self.logger.info(f"[Rank {self._get_local_rank()}] Saved checkpoint at epoch {epoch} and global steps {global_steps}.") 
         
-        with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
-            self.logger.info(f"[Rank {self._get_local_rank()}] Saved checkpoint at epoch {epoch} and global steps {global_steps}.")
+        self.logger.info(f"[Rank {self._get_local_rank()}] Saved checkpoint at epoch {epoch} and global steps {global_steps}.")
         
         if self.save_hf and self.hf_repo_exists:
 
             self.logger.info(f"[Rank {self._get_local_rank()}] Saving checkpoint to hugging face at epoch {epoch} and global steps {global_steps}.")
 
-            with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
-                self.logger.info(f"[Rank {self._get_local_rank()}] Saving checkpoint to hugging face at epoch {epoch} and global steps {global_steps}.")
+            self.logger.info(f"[Rank {self._get_local_rank()}] Saving checkpoint to hugging face at epoch {epoch} and global steps {global_steps}.")
 
             assert self.hf_repo_id is not None, ValueError('hf_repo_id must be specified')
             assert self.hf_root_path is not None, ValueError('hf_root_path must be specified')
@@ -698,10 +760,9 @@ class Trainer:
             
             except Exception as e:
                 
-                with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
-                    self.logger.error(f"[Rank {self._get_local_rank()}] Failed to upload checkpoint to hugging face: {e}")
-                    self.logger.error(f"[Rank {self._get_local_rank()}] Traceback: \n\n {traceback.format_exc()}")
-                    raise
+                self.logger.error(f"[Rank {self._get_local_rank()}] Failed to upload checkpoint to hugging face: {e}")
+                self.logger.error(f"[Rank {self._get_local_rank()}] Traceback: \n\n {traceback.format_exc()}")
+                raise
             
             try: 
                 self.logger.info(f"[Rank {self._get_local_rank()}] Uploading config to hugging face at epoch {epoch} and global steps {global_steps}.")
@@ -716,28 +777,23 @@ class Trainer:
                 self.logger.info(f"[Rank {self._get_local_rank()}] Uploaded config to hugging face at epoch {epoch} and global steps {global_steps}.")
             
             except Exception as e:
-                with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
-                    self.logger.error(f"[Rank {self._get_local_rank()}] Failed to upload config to hugging face: {e}")
-                    self.logger.error(f"[Rank {self._get_local_rank()}] Traceback: \n\n {traceback.format_exc()}")
-                    raise 
+                self.logger.error(f"[Rank {self._get_local_rank()}] Failed to upload config to hugging face: {e}")
+                self.logger.error(f"[Rank {self._get_local_rank()}] Traceback: \n\n {traceback.format_exc()}")
+                raise 
         
-            with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
-                self.logger.info(f"[Rank {self._get_local_rank()}] Saved checkpoint at epoch {epoch} and global steps {global_steps} to hugging face.")
+            self.logger.info(f"[Rank {self._get_local_rank()}] Saved checkpoint at epoch {epoch} and global steps {global_steps} to hugging face.")
         
         elif self.save_hf and not self.hf_repo_exists:
             
             self.logger.info(f"[Rank {self._get_local_rank()}] Creating hugging face repo at {self.hf_repo_id}") 
-            
-            with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
-                self.logger.info(f"[Rank {self._get_local_rank()}] Creating hugging face repo at {self.hf_repo_id}") 
         
             assert self.hf_repo_id is not None, ValueError('hf_repo_id must be specified')
             assert self.hf_root_path is not None, ValueError('hf_root_path must be specified')
             
             try:
                 
-                with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
-                    self.logger.info(f"[Rank {self._get_local_rank()}] Creating hugging face repo at {self.hf_repo_id}") 
+                self.logger.info(f"[Rank {self._get_local_rank()}] Creating hugging face repo at {self.hf_repo_id}") 
+                
                 create_repo(
                     repo_id = self.hf_repo_id,
                     repo_type = self.hf_repo_type if self.hf_repo_type else None,
@@ -747,13 +803,11 @@ class Trainer:
                 self.logger.info(f"[Rank {self._get_local_rank()}] Created hugging face repo at {self.hf_repo_id}") 
             
             except Exception as e:
-                with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
-                    self.logger.error(f"[Rank {self._get_local_rank()}] Failed to create hugging face repo: {e}")
-                    self.logger.error(f"[Rank {self._get_local_rank()}] Traceback: \n\n {traceback.format_exc()}")
-                    raise
+                self.logger.error(f"[Rank {self._get_local_rank()}] Failed to create hugging face repo: {e}")
+                self.logger.error(f"[Rank {self._get_local_rank()}] Traceback: \n\n {traceback.format_exc()}")
+                raise
         
-            with supress_logging(logger = self.logger, disable = self.disable, disable_exclude = self.disable_exclude): 
-                self.logger.info(f"[Rank {self._get_local_rank()}] Created hugging face repo at {self.hf_repo_id}")
+            self.logger.info(f"[Rank {self._get_local_rank()}] Created hugging face repo at {self.hf_repo_id}")
             
             self.hf_repo_exists = True 
             
@@ -853,32 +907,6 @@ class Trainer:
             raise ValueError(f"Invalid log level: {self.log_level}")
 
     def setup_logger(self, log_level="INFO", log_root_path=None, return_date_time=False):
-        import sys
-        from io import StringIO
-
-        class TeeHandler:
-            def __init__(self, filename):
-                self.file = open(filename, 'a')
-                self.stdout = sys.stdout
-                sys.stdout = self
-                sys.stderr = self 
-
-            def write(self, data):
-                self.file.write(data)
-                self.file.flush()
-                self.stdout.write(data)
-                
-            def flush(self):
-                self.file.flush()
-                self.stdout.flush()
-               
-            def isatty(self):
-                return self.stdout.isatty()  
-               
-            def close(self):
-                sys.stdout = self.stdout
-                sys.stderr = sys.__stderr__ 
-                self.file.close()
 
         self.logger.handlers = []
         self.logger.setLevel(log_level)
@@ -892,15 +920,17 @@ class Trainer:
         self.tee_handler = None
 
         if log_root_path and (not dist.is_initialized() or dist.get_rank() == 0):
-            os.makedirs(log_root_path, exist_ok=True)
-            log_file = os.path.join(log_root_path, f"run_{date_time}.log")
-        
+            
+            os.makedirs(os.path.join(log_root_path, f"RUN_{self.run_id}"), exist_ok=True)
+           
+            log_file = os.path.join(log_root_path, f"RUN_{self.run_id}", f"run_{date_time}.log")
             file_handler = logging.FileHandler(log_file)
             file_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
             file_handler.setFormatter(file_formatter)
             self.logger.addHandler(file_handler)
             
             self.tee_handler = TeeHandler(log_file)
+            self._log_file_path = log_file
 
         if return_date_time:
             return date_time
@@ -909,10 +939,9 @@ class Trainer:
         base_lr = optimizer.defaults["lr"]
 
         if not min_lr <= base_lr <= max_lr:
-            with supress_logging(logger=self.logger, disable=self.disable, disable_exclude=self.disable_exclude):
-                self.logger.warning(
-                    f"[Rank {self._get_local_rank()}] base_lr {base_lr} is not between min_lr {min_lr} and max_lr {max_lr}"
-                )
+            self.logger.warning(
+                f"[Rank {self._get_local_rank()}] base_lr {base_lr} is not between min_lr {min_lr} and max_lr {max_lr}"
+            )
 
         cycle_length = warmup_steps + constant_steps + decay_steps
 
@@ -941,22 +970,8 @@ class Trainer:
         return 0  # to default to 0 if not initialized
 
     def get_run_id(self):
-
-        rank = dist.get_rank()
-        world_size = dist.get_world_size()
-
-        input_list = [""] 
-
-        if rank == 0:
-            user_input = input("Enter Run ID (3 digit integer, e.g. 001): ")
-            input_list[0] = user_input
-
-        dist.broadcast_object_list(input_list, src=0)
-        dist.barrier()
-        
-        print(f"Rank {rank} received Run ID: {input_list[0]}")
-        
-        return input_list[0]
+        user_input = input("Enter Run ID (3 digit integer, e.g. 001): ")
+        return user_input
 
     def _load_checkpoint(self, checkpoint_path):
         checkpoint = torch.load(checkpoint_path, map_location='cpu')
@@ -1052,6 +1067,54 @@ class Trainer:
         colored_art = colored(ascii_art, color='red')
         print(colored_art, flush=True)
  
+    def _start_nccl_tail(self):
+        """Spawn a daemon thread that tails the NCCL log file and mirrors its
+        content to the original stderr so NCCL messages appear in the
+        terminal while still being written to the file by NCCL itself."""
+        
+        if not hasattr(self, '_nccl_log_file_path') or not self._nccl_log_file_path:
+            self.logger.warning("No NCCL log file path available for tailing")
+            return
+            
+        if not os.path.exists(self._nccl_log_file_path):
+            self.logger.warning(f"NCCL log file does not exist: {self._nccl_log_file_path}")
+            return
+
+        def _tail():
+            try:
+                self.logger.info(f"Starting NCCL log tailing from {self._nccl_log_file_path}")
+                with open(self._nccl_log_file_path, 'r') as f:
+                    f.seek(0, 2)
+                    
+                    while True:
+                        current_position = f.tell()
+                        line = f.readline()
+                        
+                        if not line:
+                            time.sleep(0.1)
+                            try:
+                                if os.path.getsize(self._nccl_log_file_path) < current_position:
+                                    f.seek(0)
+                            except (IOError, OSError) as e:
+                                self.logger.warning(f"Error checking log file size: {e}")
+                                break
+                            continue
+                            
+                        try:
+                            self._original_stderr.write(f"[NCCL] {line}")
+                            self._original_stderr.flush()
+                        except (IOError, OSError) as e:
+                            self.logger.error(f"Error writing to stderr: {e}")
+                            break
+                            
+            except Exception as e:
+                self.logger.error(f"NCCL tail thread error: {e}")
+            finally:
+                self.logger.info("NCCL log tailing thread terminated")
+
+        t = threading.Thread(target=_tail, daemon=True, name="NCCL-Log-Tail")
+        t.start()
+
 @contextmanager
 def supress_logging(logger, disable=None, disable_exclude=None):
     
@@ -1083,3 +1146,28 @@ def supress_logging(logger, disable=None, disable_exclude=None):
                 logger.addHandler(h)
     else:
         yield
+        
+class TeeHandler:
+    def __init__(self, filename):
+        self.file = open(filename, 'a')
+        self.stdout = sys.stdout
+        sys.stdout = self
+        sys.stderr = self
+
+    def write(self, data):
+        self.file.write(data)
+        self.file.flush()
+        self.stdout.write(data)
+        
+    def flush(self):
+        self.file.flush()
+        self.stdout.flush()
+        
+    def isatty(self):
+        return self.stdout.isatty()  
+        
+    def close(self):
+        if hasattr(self, 'file'):
+            sys.stdout = self.stdout
+            sys.stderr = sys.__stderr__
+            self.file.close()

@@ -74,6 +74,7 @@ This repository contains code for building, profiling, and training a variant of
   - [X] Verify that the model is uploading checkpoints to hugging face.
   - [X] Verify that the model is uploading dataset to hugging face.
   - [X] Verify that the model is logging to wandb.
+  - [ ] WHY THE FUCK IS TRAINING HANGING.
   - [ ] need to verify that we can run validation
     - [ ] Why is validation loss so low compared to the training loss, at the beginning of training????
 

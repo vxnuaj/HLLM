@@ -28,5 +28,5 @@
         "hf_root_path": "ATHENA_V1_TINY_39.7M/checkpoints"
     },
     "load_checkpoint": false,
-    "load_checkpoint_path": "main/checkpoints/RUN_001/RUN_001_DATETIME_2025-07-02_08-16-58_EPOCH_0_STEP_10_GLOBAL_STEPS_10.pt"
+    "load_checkpoint_path": null
 }

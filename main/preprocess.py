@@ -1,6 +1,7 @@
 import torch
 import os
 import tinytok.core as tt
+import argparse
 
 from datetime import datetime
 from huggingface_hub import HfApi, login, whoami
@@ -27,7 +28,7 @@ file_3 = 'data/train3.parquet'
 file_4 = 'data/train4.parquet'
 file_val = 'data/validation.parquet'
 
-file_train = [file_1, file_2, file_3, file_4]
+file_train = [file_1]
 file_val = [file_val]
 
 # PARAMS -----------------
@@ -48,10 +49,18 @@ batch_first = True
 val_train_n_samples = 2000
 
 if __name__ == "__main__":
+
+
     X_train_pth = 'data/tensors/train/X'
     y_train_pth = 'data/tensors/train/y'
     X_val_pth = 'data/tensors/val/X'
     y_val_pth = 'data/tensors/val/y'
+    
+    
+    argparser = argparse.ArgumentParser()
+    argparser.add_argument("--sample", action="store_true")
+    argparser.add_argument("--upload_hf", action="store_true")
+    args = argparser.parse_args()
  
     tt.download_tinystories(save_dir) 
   
@@ -61,7 +70,7 @@ if __name__ == "__main__":
     os.makedirs(y_val_pth, exist_ok = True)
     os.makedirs(save_dir, exist_ok = True)
 
-    # --- training ---
+    # --- processing ---
     
     data = tt.data_process(
         files=file_train,
@@ -78,12 +87,11 @@ if __name__ == "__main__":
         save_path=save_tokenizer_path
     )
     
-    data_tensor, train_token_count = tt.tokenize(
+    data_tensor = tt.tokenize(
         data=data,
         tokenizer=tokenizer,
         flat_tensor=flat_tensor,
-        processes=processes,
-        return_total_tokens=True
+        processes=processes
     )
 
     if isinstance(seq_tensor_size, int):
@@ -124,12 +132,11 @@ if __name__ == "__main__":
         processes=processes
     )
 
-    data_tensor, val_token_count = tt.tokenize(
+    data_tensor = tt.tokenize(
         data=data,
         tokenizer=tokenizer,
         flat_tensor=flat_tensor_val,
         processes=processes,
-        return_total_tokens = True
     )
 
     X_val, Y_val = tt.create_val_sequences(
@@ -144,59 +151,71 @@ if __name__ == "__main__":
     torch.save(X_val_subset, os.path.join(X_val_pth, 'X_val.pt'))
     torch.save(Y_val_subset, os.path.join(y_val_pth, 'Y_val.pt'))
    
-    total_token_count = train_token_count + val_token_count
-    
     # --- upload to hugging face ---
 
-    train_token_count = 266666496
-    val_token_count = 2233116
-    total_token_count = train_token_count + val_token_count
+    if args.upload_hf:
 
-    api = HfApi()
+        X_train_toks, _, _ = tt.get_token_count(X_train_pth, y_train_pth, return_total_toks = True)
+        X_val_toks, _, _ = tt.get_token_count(X_val_pth, y_val_pth, return_total_toks = True)
 
-    api.create_repo(
-        repo_id="tiny-research/TinyStories",
-        repo_type="dataset",
-        exist_ok=True
-    )
+        total_token_count = X_train_toks + X_val_toks
+    
+        if args.sample:
+            X_path_in_repo = f'CONTEXT_LEN_{context_len}_TOKENS_{total_token_count}_SAMPLE/TRAIN_TOKENS_{X_train_toks}_TIME_{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}/'
+        else:
+            X_path_in_repo = f'CONTEXT_LEN_{context_len}_TOKENS_{total_token_count}/TRAIN_TOKENS_{X_train_toks}_TIME_{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}/'
+    
+        if args.sample:
+            Y_path_in_repo = f'CONTEXT_LEN_{context_len}_TOKENS_{total_token_count}_SAMPLE/TRAIN_TOKENS_{X_train_toks}_TIME_{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}/'
+        else:
+            Y_path_in_repo = f'CONTEXT_LEN_{context_len}_TOKENS_{total_token_count}/TRAIN_TOKENS_{X_train_toks}_TIME_{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}/'
+    
+        
+        api = HfApi()
 
-    print("Uploading Tokenizer.") 
-     
-    api.upload_file( # the tokenizer
-        path_or_fileobj=save_tokenizer_path,
-        repo_id='tiny-research/TinyStories',
-        path_in_repo=f'CONTEXT_LEN_{context_len}_TOKENS_{total_token_count}/tokenizer.json',
-        repo_type = 'dataset'
-    )  
+        api.create_repo(
+            repo_id="tiny-research/TinyStories",
+            repo_type="dataset",
+            exist_ok=True
+        )
+        
+        print("Uploading Tokenizer.") 
+        
+        api.upload_file( # the tokenizer
+            path_or_fileobj=save_tokenizer_path,
+            repo_id='tiny-research/TinyStories',
+            path_in_repo=f'CONTEXT_LEN_{context_len}_TOKENS_{total_token_count}/tokenizer.json',
+            repo_type = 'dataset'
+        )
 
-    print('Uploading Training Files.')
+        print('Uploading Training Files.')
 
-    api.upload_folder(
-        folder_path=X_train_pth,
-        repo_id='tiny-research/TinyStories',
-        path_in_repo=f'CONTEXT_LEN_{context_len}_TOKENS_{total_token_count}/TRAIN_TOKENS_{train_token_count}_TIME_{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}/',
-        repo_type = "dataset"
-    )
+        api.upload_folder(
+            folder_path=X_train_pth,
+            repo_id='tiny-research/TinyStories',
+            path_in_repo=f'{X_path_in_repo}',
+            repo_type = "dataset"
+        )
 
-    api.upload_folder(
-        folder_path = y_train_pth,
-        repo_id='tiny-research/TinyStories',
-        path_in_repo=f'CONTEXT_LEN_{context_len}_TOKENS_{total_token_count}/TRAIN_TOKENS_{train_token_count}_TIME_{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}/',
-        repo_type = "dataset"        
-    )
+        api.upload_folder(
+            folder_path = y_train_pth,
+            repo_id='tiny-research/TinyStories',
+            path_in_repo=f'{Y_path_in_repo}',
+            repo_type = "dataset"        
+        )
 
-    print('Uploading Validation Files.')
+        print('Uploading Validation Files.')
 
-    api.upload_folder(
-        folder_path=X_val_pth,
-        repo_id='tiny-research/TinyStories',
-        path_in_repo=f'CONTEXT_LEN_{context_len}_TOKENS_{total_token_count}/VAL_TOKENS_{val_token_count}_TIME_{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}/',
-        repo_type = "dataset"        
-    )
+        api.upload_folder(
+            folder_path=X_val_pth,
+            repo_id='tiny-research/TinyStories',
+            path_in_repo=f'{X_path_in_repo}',
+            repo_type = "dataset"        
+        )
 
-    api.upload_folder(
-        folder_path=y_val_pth,
-        repo_id='tiny-research/TinyStories',
-        path_in_repo=f'CONTEXT_LEN_{context_len}_TOKENS_{total_token_count}/VAL_TOKENS_{val_token_count}_TIME_{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}/',
-        repo_type = "dataset"        
-    )
+        api.upload_folder(
+            folder_path=y_val_pth,
+            repo_id='tiny-research/TinyStories',
+            path_in_repo=f'{Y_path_in_repo}',
+            repo_type = "dataset"        
+        )
