@@ -636,7 +636,7 @@ class Trainer:
             self.logger.info(f"[Rank {self._get_local_rank()}] Not using parallelism")
             return model.cuda(int(os.environ.get('LOCAL_RANK', 0)))
             
-    def _get_avg_rank_loss_pplx(self, loss, _val = False):
+    def _get_avg_rank_loss_pplx(self, loss, _val = None):
         if _val:
             if self.parallel_type == 'ddp':
                 dist.all_reduce(loss, op = ReduceOp.SUM)  
