@@ -637,19 +637,17 @@ class Trainer:
             return model.cuda(int(os.environ.get('LOCAL_RANK', 0)))
             
     def _get_avg_rank_loss_pplx(self, loss, _val = None):
-        if _val:
-            if self.parallel_type == 'ddp':
-                dist.all_reduce(loss, op = ReduceOp.SUM)  
-                loss = loss / dist.get_world_size() 
-                pplx = torch.exp(loss).item()
-                return loss, pplx 
-        elif not _val:  
-            if self.parallel_type == 'ddp':
-                loss_avg_scalar = loss.mean() 
-                dist.all_reduce(loss_avg_scalar, op = ReduceOp.SUM) 
-                loss_avg_scalar = loss_avg_scalar / dist.get_world_size() 
-                pplx_avg = torch.exp(loss_avg_scalar).item()
-                return loss_avg_scalar, pplx_avg
+        if _val is not None:
+            dist.all_reduce(loss, op = ReduceOp.SUM)  
+            loss = loss / dist.get_world_size() 
+            pplx = torch.exp(loss).item()
+            return loss, pplx 
+        elif _val is None:  
+            loss_avg_scalar = loss.mean() 
+            dist.all_reduce(loss_avg_scalar, op = ReduceOp.SUM) 
+            loss_avg_scalar = loss_avg_scalar / dist.get_world_size() 
+            pplx_avg = torch.exp(loss_avg_scalar).item()
+            return loss_avg_scalar, pplx_avg
         
     def _get_model_state_dict(self):
        
