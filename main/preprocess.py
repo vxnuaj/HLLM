@@ -28,7 +28,7 @@ file_3 = 'data/train3.parquet'
 file_4 = 'data/train4.parquet'
 file_val = 'data/validation.parquet'
 
-file_train = [file_1]
+file_train = [file_1, file_2, file_3, file_4]
 file_val = [file_val]
 
 # PARAMS -----------------
