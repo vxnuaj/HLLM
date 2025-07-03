@@ -27,8 +27,6 @@ class TrainingConfig:
     _compile_warmup_steps: int
     hf_repo_config: Dict[str, Any] = field(default_factory=dict)
     mixed_precision_dtype: torch.dtype = torch.float16
-    disable: Union[Optional[bool], Optional[int]] = None
-    disable_exclude: Union[Optional[bool], Optional[int]] = None
     log_root_path: Optional[str] = None
     load_checkpoint: bool = False
     load_checkpoint_path: Optional[str] = None

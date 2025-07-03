@@ -50,7 +50,7 @@ class LLaMA(nn.Module):
         p_threshold:int = None,
         p_threshold_steps_fraction:float = None,
         flash_attn:bool = False,
-        flash_attn_dtype:torch.dtype = torch.float16,
+        flash_attn_dtype:torch.dtype = "float16",
         supress_warnings: bool = True,
         verbose:bool = False,
         model_name:str = None,

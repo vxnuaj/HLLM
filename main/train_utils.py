@@ -15,6 +15,7 @@ import traceback
 import wandb
 import signal
 
+from torchinfo import summary
 from io import StringIO
 from dataclasses import asdict
 from dataloader import get_data
@@ -125,9 +126,6 @@ class Trainer:
         self.model_name = self.model_config.model_name
         self.model_series_name = self.model_config.model_series_name
 
-        self.disable = self.train_config.disable
-        self.disable_exclude = self.train_config.disable_exclude
-
         if track_grad_norm_state != self.track_grad_norm:
             self.logger.warning("Gradient norm tracking is disabled because wandb is not enabled")
         
@@ -169,8 +167,10 @@ class Trainer:
         self.scheduler = self.get_scheduler(self.optimizer, **scheduler_config_dict)
     
         if self.load_checkpoint:
-            assert self.load_checkpoint_path is not None, ValueError("load_checkpoint_path must be specified if load_checkpoint is True")
-            assert isinstance(self.load_checkpoint_path, str), ValueError("load_checkpoint_path must be a string") 
+            assert self.load_checkpoint_path is not None, ValueError("load_checkpoint_path \
+                                        must be specified if load_checkpoint is True")
+            assert isinstance(self.load_checkpoint_path, str), ValueError("load_checkpoint_path \
+                                        must be a string") 
             
             self._chk_cont_epoch, self._chk_cont_global_step, self._chk_cont_local_steps = \
                 self._load_checkpoint(self.load_checkpoint_path) 
@@ -294,7 +294,7 @@ class Trainer:
                 ''' 
               
                 self.logger.info(f"[Rank {self._get_local_rank()}] Setting up Progress Bar")
-                
+               
                 progress_bar = tqdm(
                     dataloader_iter,
                     initial=self._chk_cont_local_steps if hasattr(self, '_chk_cont_local_steps') and epoch == start_epoch else 0,
@@ -715,6 +715,8 @@ class Trainer:
         self.logger.info(f"[Rank {self._get_local_rank()}] Saved checkpoint at epoch {epoch} and global steps {global_steps}.") 
         
         self.logger.info(f"[Rank {self._get_local_rank()}] Saved checkpoint at epoch {epoch} and global steps {global_steps}.")
+       
+        # main/checkpoints/RUN_001/RUN_001_DATETIME_2025-07-03_21-19-58_EPOCH_0_step_10_global_steps_10.pt 
         
         if self.save_hf and self.hf_repo_exists:
 
@@ -733,7 +735,7 @@ class Trainer:
                
                 api.upload_file(
                     path_or_fileobj = os.path.join(root_path, \
-                        f'RUN_{self.run_id}_DATETIME_{self.run_start_date_time}_EPOCH_{epoch}_step_{steps}_global_steps_{global_steps}.pt'),
+                        f'RUN_{self.run_id}_DATETIME_{self.run_start_date_time}_EPOCH_{epoch}_STEP_{steps}_GLOBAL_STEPS_{global_steps}.pt'),
                     path_in_repo = os.path.join(self.hf_root_path, f'RUN_{self.run_id}', \
                         f'RUN_{self.run_id}_DATETIME_{self.run_start_date_time}_EPOCH_{epoch}_STEP_{steps}_GLOBAL_STEPS_{global_steps}.pt'),
                     repo_id = self.hf_repo_id,
@@ -933,7 +935,7 @@ class Trainer:
         cycle_length = warmup_steps + constant_steps + decay_steps
 
         def lr_lambda(step):
-            step_in_cycle = step % cycle_length
+            step_in_cycle = min(step, cycle_length)
 
             if step_in_cycle < warmup_steps:
                 lr = min_lr + (max_lr - min_lr) * (step_in_cycle / warmup_steps)

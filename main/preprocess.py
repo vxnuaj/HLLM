@@ -12,7 +12,8 @@ load_dotenv(dotenv_path = 'main/configs/.env')
 hf_token = os.environ.get("HF_TOKEN")
 
 if hf_token is None:
-    raise ValueError("HF_TOKEN environment variable is not set. Please set it in your .env file.")
+    raise ValueError("HF_TOKEN environment variable is not set. \
+                     Please set it in your .env file.")
 
 login(token=hf_token)  
 
