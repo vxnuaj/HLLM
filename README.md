@@ -75,9 +75,9 @@ This repository contains code for building, profiling, and training a variant of
   - [X] Verify that the model is uploading dataset to hugging face.
   - [X] Verify that the model is logging to wandb.
   - [X] is nccl being logged to a file???
-  - [ ] WHY THE FUCK IS TRAINING HANGING.
+  - [X] WHY THE FUCK IS TRAINING HANGING.
   - [ ] need to verify that we can run validation
-  - [ ] Why is validation loss so low compared to the training loss, at the beginning of training????
+    - [ ] Why is validation loss so low compared to the training loss, at the beginning of training????
 
 ### Pre-Training Prep
 
