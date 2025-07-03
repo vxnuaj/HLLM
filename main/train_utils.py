@@ -19,6 +19,7 @@ import pyfiglet
 import termcolor
 import atexit
 import huggingface_hub
+import shutil
 
 from io import StringIO
 from dataclasses import asdict
@@ -59,7 +60,9 @@ class Trainer:
         train_config:dict,
         debug_nccl:bool = False,
         debug_level:str = 'INFO',
-        debug_subsys:bool = False 
+        debug_subsys:bool = False,
+        run_id:int = None, # TODO use this as run_id rather than using info later on.
+        rm_logs_for_run_id:bool = False,
         ):
        
         self.model_config = ModelConfig(**model_config)
@@ -78,12 +81,14 @@ class Trainer:
         self.debug_subsys = debug_subsys
  
         self._original_stderr = sys.__stderr__
-        self.run_id = self.get_run_id()
         
+        self.run_id = self.get_run_id()
+       
         self.logger = logging.getLogger(__name__)
+        self.rm_logs_for_run_id = rm_logs_for_run_id
         self.run_start_date_time = self.setup_logger(log_level=self.log_level, \
                                                      log_root_path=self.log_root_path, return_date_time = True)
-       
+
         
         assert torch.cuda.is_available(), ValueError("No CUDA device found")
      
@@ -148,7 +153,7 @@ class Trainer:
         
         self.scaler = GradScaler() if self.mixed_precision else None
         self._setup_parallel()
-        
+       
         if not dist.is_initialized() or dist.get_rank() == 0:
             self._ascii_art_model_name()
        
@@ -274,15 +279,25 @@ class Trainer:
             self._ascii_art_model_name() 
            
             dataloader_iter = enumerate(self.dataloader)
+            
             if hasattr(self, '_chk_cont_local_steps') and self._chk_cont_local_steps > 0:
                 for _ in range(self._chk_cont_local_steps + 1):
                     next(dataloader_iter)
-            
+           
             for epoch in range(start_epoch, self.epochs):
+                self.logger.info(f"[Rank {self._get_local_rank()}] Starting epoch {epoch + 1}/{self.epochs}.") 
                 console_handlers = [h for h in self.logger.handlers if isinstance(h, logging.StreamHandler)]
+                self.logger.info(f"[Rank {self._get_local_rank()}] Console Handlers: {console_handlers}")
                 self.console_handlers = console_handlers
+
+                '''
                 for _h in console_handlers:
-                    self.logger.removeHandler(_h)
+                    if _h.stream == sys.stderr:
+                        self.logger.info(f"[Rank {self._get_local_rank()}] Keeping stderr Console Handler for progress bar")
+                        break
+                ''' 
+              
+                self.logger.info(f"[Rank {self._get_local_rank()}] Setting up Progress Bar")
                 
                 progress_bar = tqdm(
                     dataloader_iter,
@@ -290,17 +305,25 @@ class Trainer:
                     desc=f"Epoch {epoch + 1}/{self.epochs} | Loss: - | PPLX: - | LR: - | Time: -",
                     total=len(self.dataloader),
                     disable=(dist.get_rank()!=0 and self.parallel_type in ['fsdp', 'ddp']),
-                    ascii = False
+                    ascii=False,
                 )
+               
+                self.logger.info(f"[Rank {self._get_local_rank()}] Progress Bar Set Up") 
                 
                 if hasattr(self, '_chk_cont_local_steps') and epoch == start_epoch:
+                    self.logger.info(f"[Rank {self._get_local_rank()}] Resuming training from local step {self._chk_cont_local_steps}")
                     local_steps = self._chk_cont_local_steps
                     del self._chk_cont_local_steps
                 else:
+                    self.logger.info(f"[Rank {self._get_local_rank()}] Not Resuming training from local step")
                     local_steps = 0
-                
+               
+                self.logger.info(f"[Rank {self._get_local_rank()}] Starting Training") 
                 for i, (X, y) in progress_bar:
+                    self.logger.info(f"[Rank {self._get_local_rank()}] Training batch {i + 1}/{len(self.dataloader)}.") 
                     X, y = X.to(self.device, non_blocking=True), y.to(self.device, non_blocking=True)
+                    self.logger.info(f"[Rank {self._get_local_rank()}] Moved to Device") 
+                    
                     local_steps += 1
                     
                     if self.mixed_precision:
@@ -310,10 +333,12 @@ class Trainer:
                             logits = self.model(X)
                             loss = self.criterion(logits.view(-1, logits.size(-1)), y.view(-1))
                         loss_avg, pplx_avg = self._get_avg_rank_loss_pplx(loss) 
+                        self.logger.info(f"[Rank {self._get_local_rank()}] Got Loss") 
                         self.scaler.scale(loss_avg).backward() 
                         self.scaler.unscale_(self.optimizer)
                         if self.track_grad_norm:
                             grad_norm_dict = self._get_grad_norm()
+                        self.logger.info(f"[Rank {self._get_local_rank()}] Got Gradients") 
                         self._clip_grad_norm()
                         self.scaler.step(self.optimizer) 
                         self.scaler.update()
@@ -332,8 +357,10 @@ class Trainer:
                         self._clip_grad_norm()
                         if self.track_grad_norm:
                             grad_norm_dict = self._get_grad_norm()
+                        self.logger.info(f"[Rank {self._get_local_rank()}] Got Gradients") 
                         self.optimizer.step()
                         self.scheduler.step()
+                        self.logger.info(f"[Rank {self._get_local_rank()}] Updated Optimizer") 
                     
                     global_steps += 1
                    
@@ -345,6 +372,8 @@ class Trainer:
                             f"LR: {self.scheduler.get_last_lr()[0]:.2e} | "
                             f"Time: {end_time - start_time:.5f}s"
                         )
+                   
+                    self.logger.info(f"[Rank {self._get_local_rank()}] Updated Progress Bar")
                     
                     if self.wandb_ and is_main_rank: 
                         wandb_dict = {
@@ -530,7 +559,7 @@ class Trainer:
     def _setup_parallel(self):
         if not dist.is_initialized():
             try:
-                local_rank = int(os.environ['LOCAL_RANK'])  # fail if missing
+                local_rank = int(os.environ['LOCAL_RANK'])
                 rank = int(os.environ['RANK'])
                 world_size = int(os.environ['WORLD_SIZE'])
             except KeyError as e:
@@ -548,10 +577,11 @@ class Trainer:
                     init_method='env://',
                     rank=rank,
                     world_size=world_size,
+                    device_id = torch.device(f'cuda:{local_rank}')
                 )
-                self.logger.info(f"[Rank {rank}] Successfully initialized process group on GPU {local_rank}")
+                self.logger.info(f"[Rank {rank}] Successfully initialized training process group on GPU {local_rank}")
             except Exception as e:
-                self.logger.error(f"[Rank {rank}] Error initializing process group: {str(e)}")
+                self.logger.error(f"[Rank {rank}] Error initializing training process group: {str(e)}")
                 raise RuntimeError(
                     f"Error initializing distributed training: {str(e)}\n"
                     "Make sure you're running with torchrun and have set all required environment variables."
@@ -883,6 +913,9 @@ class Trainer:
         if log_root_path and (not dist.is_initialized() or dist.get_rank() == 0):
             
             os.makedirs(os.path.join(log_root_path, f"RUN_{self.run_id}"), exist_ok=True)
+
+            if self.rm_logs_for_run_id:
+                self._rm_logs_for_run_id()
            
             log_file = os.path.join(log_root_path, f"RUN_{self.run_id}", f"run_{date_time}.log")
             file_handler = logging.FileHandler(log_file)
@@ -961,10 +994,9 @@ class Trainer:
                 return input("Enter Run ID (3 digit integer, e.g. 001): ")
                 
         finally:
-            
             if should_destroy:
+                print(f'[Rank {self._get_local_rank()}] Destroying Temporary Process Group') 
                 dist.destroy_process_group()
-                
             if was_initialized and original_backend and original_backend != 'gloo':
                 print(f'[Rank {self._get_local_rank()}] Restoring Original Process Group') 
                 dist.init_process_group(backend=original_backend, init_method='env://')
@@ -1069,6 +1101,8 @@ class Trainer:
         All GPUs on the same node will log to the same file.
         No output will be displayed on the terminal.
         """
+       
+        self.logger.info(f"[Rank {self._get_local_rank()}] Setting up NCCL logging") 
         
         if not _unset:
             self._log_file_path = getattr(self, "_log_file_path", None)
@@ -1080,6 +1114,7 @@ class Trainer:
                         self._nccl_log_file_path = f"{root}_nccl{ext}"
                         nccl_dir = os.path.dirname(self._nccl_log_file_path)
                         os.makedirs(nccl_dir, exist_ok=True) 
+                        dist.barrier()
                         try:
                             with open(self._nccl_log_file_path, "a"):
                                 pass
@@ -1088,9 +1123,6 @@ class Trainer:
                             self.logger.warning(f"[Rank {self._get_local_rank()}] Could not create NCCL log file: {err}")
                             self._nccl_log_file_path = None
                             return
-            
-                if dist.is_initialized():
-                    dist.barrier()
             
                 if hasattr(self, '_nccl_log_file_path') and self._nccl_log_file_path:
                     os.environ['NCCL_DEBUG_FILE'] = self._nccl_log_file_path
@@ -1161,6 +1193,16 @@ class Trainer:
         t = threading.Thread(target=_tail, daemon=True, name="NCCL-Log-Tail")
         t.start()
     '''
+
+    def _rm_logs_for_run_id(self):
+        self.logger.info(f"Removing logs for run id: {self.run_id}")
+        if self.rm_logs_for_run_id:
+            logs_dir = os.listdir(self.log_root_path)  
+            for pth in logs_dir:    
+                full_pth = os.path.join(self.log_root_path, pth)
+                if os.path.isfile(full_pth):
+                    os.remove(full_pth)
+        self.logger.info(f"Removed logs for run id: {self.run_id}")
 
 @contextmanager
 def supress_logging(logger, disable=None, disable_exclude=None):

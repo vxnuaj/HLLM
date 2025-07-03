@@ -66,8 +66,6 @@ def get_data(path, context_length=512):
     if not X_pths or not y_pths:
         raise OSError(f"No .pt files found in {X_dir} or {y_dir}")
 
-    print(f'Loading data from {len(X_pths)} X files and {len(y_pths)} y files')
-    
     X_list = []
     y_list = []
     

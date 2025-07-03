@@ -21,6 +21,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--debug_nccl', action='store_true', help='Enable debug mode')
 parser.add_argument('--debug_subsys', action = 'store_true', default = False, help='Debug subsystem')
 parser.add_argument('--debug_level', type=str, default='INFO', help='Debug level')
+parser.add_argument('--rm_logs_for_run_id', action='store_true', default = False, help='Remove logs for run id')
 args = parser.parse_args()
 
 trainer = Trainer(
@@ -33,7 +34,8 @@ trainer = Trainer(
     train_config = train_config,
     debug_nccl = args.debug_nccl,
     debug_level = args.debug_level,
-    debug_subsys = args.debug_subsys
+    debug_subsys = args.debug_subsys,
+    rm_logs_for_run_id = args.rm_logs_for_run_id
 )
 
 trainer.train()
