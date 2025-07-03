@@ -89,7 +89,6 @@ class Trainer:
         self.run_start_date_time = self.setup_logger(log_level=self.log_level, \
                                                      log_root_path=self.log_root_path, return_date_time = True)
 
-        
         assert torch.cuda.is_available(), ValueError("No CUDA device found")
      
         self.train_dataloader_config = self.dataloader_config.train_dataloader_config 
@@ -152,12 +151,13 @@ class Trainer:
         fig = Figlet(font='larry3d')
         
         self.scaler = GradScaler() if self.mixed_precision else None
+        
+        self._setup_nccl_logging() 
         self._setup_parallel()
        
         if not dist.is_initialized() or dist.get_rank() == 0:
             self._ascii_art_model_name()
        
-        self._setup_nccl_logging() 
         self.device = self._get_device()
         self.model = self._get_model(asdict(self.model_config))
 
@@ -170,7 +170,8 @@ class Trainer:
         del scheduler_config_dict['extra_args']
 
         self.criterion = nn.CrossEntropyLoss(**criterion_config_dict)
-        self.optimizer = opt.AdamW(self._build_param_groups(self.model, optimizer_config_dict), **{k: v for k, v in optimizer_config_dict.items() if k != 'weight_decay'})
+        self.optimizer = opt.AdamW(self._build_param_groups(self.model, optimizer_config_dict),
+                                   **{k: v for k, v in optimizer_config_dict.items() if k != 'weight_decay'})
         self.scheduler = self.get_scheduler(self.optimizer, **scheduler_config_dict)
     
         if self.load_checkpoint:
@@ -269,7 +270,8 @@ class Trainer:
             self.logger.info(f"[Rank {self._get_local_rank()}] Training {len(self.dataloader) * self.context_length} tokens per epoch.")
             self.logger.info(f"[Rank {self._get_local_rank()}] Training {len(self.dataloader) * self.context_length * (self.epochs - start_epoch)} tokens over remaining epochs.")
 
-            self._setup_nccl_logging(_unset = True) 
+            if self.debug_nccl or self.debug_subsys: # if it was prev set, unset it. 
+                self._setup_nccl_logging(_unset = True)
             
             if os.name == 'nt':
                 os.system('cls')
@@ -318,11 +320,8 @@ class Trainer:
                     self.logger.info(f"[Rank {self._get_local_rank()}] Not Resuming training from local step")
                     local_steps = 0
                
-                self.logger.info(f"[Rank {self._get_local_rank()}] Starting Training") 
                 for i, (X, y) in progress_bar:
-                    self.logger.info(f"[Rank {self._get_local_rank()}] Training batch {i + 1}/{len(self.dataloader)}.") 
                     X, y = X.to(self.device, non_blocking=True), y.to(self.device, non_blocking=True)
-                    self.logger.info(f"[Rank {self._get_local_rank()}] Moved to Device") 
                     
                     local_steps += 1
                     
@@ -333,12 +332,10 @@ class Trainer:
                             logits = self.model(X)
                             loss = self.criterion(logits.view(-1, logits.size(-1)), y.view(-1))
                         loss_avg, pplx_avg = self._get_avg_rank_loss_pplx(loss) 
-                        self.logger.info(f"[Rank {self._get_local_rank()}] Got Loss") 
                         self.scaler.scale(loss_avg).backward() 
                         self.scaler.unscale_(self.optimizer)
                         if self.track_grad_norm:
                             grad_norm_dict = self._get_grad_norm()
-                        self.logger.info(f"[Rank {self._get_local_rank()}] Got Gradients") 
                         self._clip_grad_norm()
                         self.scaler.step(self.optimizer) 
                         self.scaler.update()
@@ -357,10 +354,8 @@ class Trainer:
                         self._clip_grad_norm()
                         if self.track_grad_norm:
                             grad_norm_dict = self._get_grad_norm()
-                        self.logger.info(f"[Rank {self._get_local_rank()}] Got Gradients") 
                         self.optimizer.step()
                         self.scheduler.step()
-                        self.logger.info(f"[Rank {self._get_local_rank()}] Updated Optimizer") 
                     
                     global_steps += 1
                    
@@ -373,8 +368,6 @@ class Trainer:
                             f"Time: {end_time - start_time:.5f}s"
                         )
                    
-                    self.logger.info(f"[Rank {self._get_local_rank()}] Updated Progress Bar")
-                    
                     if self.wandb_ and is_main_rank: 
                         wandb_dict = {
                             "loss": loss_avg,
@@ -424,8 +417,6 @@ class Trainer:
                                 f"Checkpoint saved"
                             )
                             
-                            self.logger.info(f"[Rank {self._get_local_rank()}] Checkpoint saved to {checkpoint_path}")
-                      
                         dist.barrier()
                    
                     if self.val_steps and (global_steps % self.val_steps == 0):
@@ -1096,53 +1087,40 @@ class Trainer:
         print(colored_art, flush=True)
 
     def _setup_nccl_logging(self, _unset=False):
-        """
-        Set up NCCL logging to a single file per node.
-        All GPUs on the same node will log to the same file.
-        No output will be displayed on the terminal.
-        """
-       
-        self.logger.info(f"[Rank {self._get_local_rank()}] Setting up NCCL logging") 
-        
-        if not _unset:
-            self._log_file_path = getattr(self, "_log_file_path", None)
-            if self.debug_nccl or self.debug_subsys:
-                if self._get_local_rank() == 0:
-                    if self._log_file_path:
-                        self.logger.info(f"[Rank {self._get_local_rank()}] Attempting to setup NCCL logging to {self._log_file_path}") 
-                        root, ext = os.path.splitext(self._log_file_path)  
-                        self._nccl_log_file_path = f"{root}_nccl{ext}"
-                        nccl_dir = os.path.dirname(self._nccl_log_file_path)
-                        os.makedirs(nccl_dir, exist_ok=True) 
-                        dist.barrier()
-                        try:
-                            with open(self._nccl_log_file_path, "a"):
-                                pass
-                            self.logger.debug(f"[Rank {self._get_local_rank()}] Created NCCL log file at {self._nccl_log_file_path}")
-                        except OSError as err:
-                            self.logger.warning(f"[Rank {self._get_local_rank()}] Could not create NCCL log file: {err}")
-                            self._nccl_log_file_path = None
-                            return
-            
-                if hasattr(self, '_nccl_log_file_path') and self._nccl_log_file_path:
-                    os.environ['NCCL_DEBUG_FILE'] = self._nccl_log_file_path
-                    self.logger.info(f"[Rank {self._get_local_rank()}] NCCL debug output will be saved to {self._nccl_log_file_path}")
-                
-                    if self.debug_nccl:
-                        os.environ['NCCL_DEBUG'] = self.debug_level
-                    if self.debug_subsys:
-                        os.environ['NCCL_DEBUG_SUBSYS'] = self.debug_subsys
-                
-                    os.environ['NCCL_DEBUG'] = os.environ.get('NCCL_DEBUG', 'WARN')
-                    os.environ['NCCL_DEBUG_FILE'] = self._nccl_log_file_path
+        rank = self._get_local_rank()
+        self.logger.info(f"[Rank {rank}] Setting up NCCL logging")
 
-        elif _unset:
-            
-            self.logger.info(f"[Rank {self._get_local_rank()}] Unsetting NCCL logging environment variables")
-            os.unsetenv('NCCL_DEBUG_FILE')
-            os.unsetenv('NCCL_DEBUG')
-            os.unsetenv('NCCL_DEBUG_SUBSYS')
-            self.logger.info(f"[Rank {self._get_local_rank()}] No longer logging NCCL") 
+        if _unset:
+            self.logger.info(f"[Rank {rank}] Unsetting NCCL logging environment variables")
+            for var in ['NCCL_DEBUG', 'NCCL_DEBUG_SUBSYS', 'NCCL_DEBUG_FILE']:
+                os.environ.pop(var, None)
+            self.logger.info(f"[Rank {rank}] NCCL logging disabled")
+            return
+
+        if self.debug_nccl or self.debug_subsys:
+            if self.debug_nccl:
+                os.environ['NCCL_DEBUG'] = self.debug_level
+            if self.debug_subsys:
+                os.environ['NCCL_DEBUG_SUBSYS'] = 'ALL'
+
+            if self._log_file_path is not None:
+                log_dir = os.path.dirname(self._log_file_path)
+                self._nccl_log_file_path = os.path.join(
+                    log_dir,
+                    f"nccl_rank{rank}_pid{os.getpid()}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.log"
+                )
+
+                try:
+                    with open(self._nccl_log_file_path, 'a'):
+                        pass
+                    os.environ['NCCL_DEBUG_FILE'] = self._nccl_log_file_path
+                    self.logger.info(f"[Rank {rank}] Created NCCL log file at {self._nccl_log_file_path}")
+                except OSError as err:
+                    self.logger.warning(f"[Rank {rank}] Could not create NCCL log file: {err}")
+
+            self.logger.info(f"[Rank {rank}] NCCL_DEBUG={os.environ.get('NCCL_DEBUG', 'not set')}")
+            self.logger.info(f"[Rank {rank}] NCCL_DEBUG_SUBSYS={os.environ.get('NCCL_DEBUG_SUBSYS', 'not set')}")
+            self.logger.info(f"[Rank {rank}] NCCL_DEBUG_FILE={os.environ.get('NCCL_DEBUG_FILE', 'not set')}")
             
     '''
     def _start_nccl_tail(self):
