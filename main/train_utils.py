@@ -434,7 +434,6 @@ class Trainer:
                         val_progress_bar = tqdm(enumerate(val_dataloader), desc = "Evaluating", total = len(val_dataloader),
                                             disable = (dist.get_rank()!=0 and self.parallel_type in ['fsdp', 'ddp']), ascii = False)
                        
-                     
                         # the point of this is to accmulate the loss over the entire validation set 
                         # and then calculate the average loss over the entire validation set 
                      
