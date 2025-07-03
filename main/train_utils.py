@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.optim as opt
 import torch.distributed as dist
+import torch.nn.functional as F
 import logging
 import json
 import math
@@ -12,14 +13,7 @@ import sys
 import functools
 import traceback
 import wandb
-import threading
 import signal
-import rich.logging
-import pyfiglet
-import termcolor
-import atexit
-import huggingface_hub
-import shutil
 
 from io import StringIO
 from dataclasses import asdict
@@ -452,16 +446,26 @@ class Trainer:
                                         logits = self.model(X_val)
                                         if is_main_rank:
                                             end_time = time.perf_counter()
-                                        loss = self.criterion(logits.view(-1, logits.size(-1)), y_val.view(-1))
-                                    loss_avg, pplx_avg = self._get_avg_rank_loss_pplx(loss)
+                                        loss = F.cross_entropy(
+                                            input = logits.view(-1, logits.size(-1)), 
+                                            target = y_val.view(-1),
+                                            ignore_index = self.criterion_config.ignore_index,
+                                            reduction = 'mean' 
+                                            )
+                                    loss_avg, pplx_avg = self._get_avg_rank_loss_pplx(loss, _val = True)
                                 else:
                                     if is_main_rank:
                                         start_time = time.perf_counter() 
                                     logits = self.model(X_val)
                                     if is_main_rank:
                                         end_time = time.perf_counter()
-                                    loss = self.criterion(logits.view(-1, logits.size(-1)), y_val.view(-1))
-                                    loss_avg, pplx_avg = self._get_avg_rank_loss_pplx(loss)
+                                    loss = F.cross_entropy(
+                                        input = logits.view(-1, logits.size(-1)), 
+                                        target = y_val.view(-1),
+                                        ignore_index = self.criterion_config.ignore_index,
+                                        reduction = 'mean'     
+                                        )
+                                    loss_avg, pplx_avg = self._get_avg_rank_loss_pplx(loss, _val = True)
 
                                 running_accum_val_loss += loss_avg
                                 running_accum_val_pplx += pplx_avg
@@ -632,19 +636,20 @@ class Trainer:
             self.logger.info(f"[Rank {self._get_local_rank()}] Not using parallelism")
             return model.cuda(int(os.environ.get('LOCAL_RANK', 0)))
             
-    def _get_avg_rank_loss_pplx(self, loss):
-        if self.parallel_type == 'ddp':
-            loss_avg_scalar = loss.mean() 
-            dist.all_reduce(loss_avg_scalar, op = ReduceOp.SUM) 
-            loss_avg_scalar = loss_avg_scalar / dist.get_world_size() 
-            pplx_avg = torch.exp(loss_avg_scalar).item()
-            return loss_avg_scalar, pplx_avg
-        elif self.parallel_type == 'fsdp':
-            loss_avg_scalar = loss.mean() 
-            dist.all_reduce(loss_avg_scalar, op=ReduceOp.SUM)
-            loss_avg_scalar = loss_avg_scalar / dist.get_world_size()
-            pplx_avg = torch.exp(loss_avg_scalar).item() 
-            return loss_avg_scalar, pplx_avg
+    def _get_avg_rank_loss_pplx(self, loss, _val = False):
+        if _val:
+            if self.parallel_type == 'ddp':
+                dist.all_reduce(loss, op = ReduceOp.SUM)  
+                loss = loss / dist.get_world_size() 
+                pplx = torch.exp(loss).item()
+                return loss, pplx 
+        elif not _val:  
+            if self.parallel_type == 'ddp':
+                loss_avg_scalar = loss.mean() 
+                dist.all_reduce(loss_avg_scalar, op = ReduceOp.SUM) 
+                loss_avg_scalar = loss_avg_scalar / dist.get_world_size() 
+                pplx_avg = torch.exp(loss_avg_scalar).item()
+                return loss_avg_scalar, pplx_avg
         
     def _get_model_state_dict(self):
        
