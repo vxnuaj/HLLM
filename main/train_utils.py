@@ -1,5 +1,4 @@
 import torch
-
 import torch.nn as nn
 import torch.optim as opt
 import torch.distributed as dist
@@ -18,6 +17,7 @@ import signal
 import rich.logging
 import pyfiglet
 import termcolor
+import atexit
 import huggingface_hub
 
 from io import StringIO
@@ -69,9 +69,7 @@ class Trainer:
         self.dataloader_config = DataloaderConfig(**dataloader_config)
         self.wandb_config = WandbConfig(**wandb_config)
         self.train_config = TrainingConfig(**train_config)
-      
-        self.run_id = self.get_run_id()
-        
+
         self.log_level = self.train_config.log_level
         self.log_root_path = self.train_config.log_root_path if hasattr(self.train_config, 'log_root_path') else None
 
@@ -79,14 +77,13 @@ class Trainer:
         self.debug_level = debug_level
         self.debug_subsys = debug_subsys
  
-        # Capture original stderr **before** setup_logger() installs TeeHandler so that
-        # the NCCL tail thread can write to the genuine terminal stream without
-        # duplicating messages into the main training log file.
         self._original_stderr = sys.__stderr__
+        self.run_id = self.get_run_id()
         
         self.logger = logging.getLogger(__name__)
         self.run_start_date_time = self.setup_logger(log_level=self.log_level, \
                                                      log_root_path=self.log_root_path, return_date_time = True)
+       
         
         assert torch.cuda.is_available(), ValueError("No CUDA device found")
      
@@ -929,14 +926,49 @@ class Trainer:
         return LambdaLR(optimizer, lr_lambda)
 
     def _get_local_rank(self):
-        if dist.is_initialized():
-            return int(os.environ.get('LOCAL_RANK', 0))
-        return 0
+        return int(os.environ['LOCAL_RANK'])
 
     def get_run_id(self):
-        user_input = input("Enter Run ID (3 digit integer, e.g. 001): ")
-        return user_input
-
+        was_initialized = dist.is_initialized()
+        original_backend = dist.get_backend() if was_initialized else None
+        
+        if not was_initialized and 'LOCAL_RANK' in os.environ:
+            print(f'[Rank {self._get_local_rank()}] Initializing Temporary Process Group') 
+            dist.init_process_group(backend='gloo', init_method='env://')
+            should_destroy = True
+        else:
+            should_destroy = False
+        
+        try:
+            if 'LOCAL_RANK' in os.environ:
+                local_rank = int(os.environ['LOCAL_RANK'])
+                if local_rank == 0:
+                    user_input = input("Enter Run ID (3 digit integer, e.g. 001): ")
+                    input_tensor = torch.tensor([ord(c) for c in user_input], dtype=torch.int64)
+                    input_len = torch.tensor([len(user_input)], dtype=torch.int64)
+                    dist.broadcast(input_len, src=0)
+                    dist.broadcast(input_tensor, src=0)
+                else:
+                    input_len = torch.tensor([0], dtype=torch.int64)
+                    dist.broadcast(input_len, src=0)
+                    input_tensor = torch.zeros(input_len.item(), dtype=torch.int64)
+                    dist.broadcast(input_tensor, src=0)
+                    user_input = ''.join(chr(c) for c in input_tensor.tolist())
+                    
+                dist.barrier()
+                return user_input
+            else:
+                return input("Enter Run ID (3 digit integer, e.g. 001): ")
+                
+        finally:
+            
+            if should_destroy:
+                dist.destroy_process_group()
+                
+            if was_initialized and original_backend and original_backend != 'gloo':
+                print(f'[Rank {self._get_local_rank()}] Restoring Original Process Group') 
+                dist.init_process_group(backend=original_backend, init_method='env://')
+            
     def _load_checkpoint(self, checkpoint_path):
         checkpoint = torch.load(checkpoint_path, map_location='cpu')
        
