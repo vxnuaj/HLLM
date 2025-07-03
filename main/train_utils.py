@@ -74,6 +74,10 @@ class Trainer:
         
         self.log_level = self.train_config.log_level
         self.log_root_path = self.train_config.log_root_path if hasattr(self.train_config, 'log_root_path') else None
+
+        self.debug_nccl = debug_nccl
+        self.debug_level = debug_level
+        self.debug_subsys = debug_subsys
  
         # Capture original stderr **before** setup_logger() installs TeeHandler so that
         # the NCCL tail thread can write to the genuine terminal stream without
@@ -84,46 +88,6 @@ class Trainer:
         self.run_start_date_time = self.setup_logger(log_level=self.log_level, \
                                                      log_root_path=self.log_root_path, return_date_time = True)
         
-        self._log_file_path = getattr(self, "_log_file_path", None)
-        self._nccl_log_file_path = None
-        
-        if debug_nccl or debug_subsys:
-            if debug_nccl:
-                os.environ['NCCL_DEBUG'] = debug_level
-            if debug_subsys:
-                os.environ['NCCL_DEBUG_SUBSYS'] = 'ALL'
-            
-            # Only set up NCCL logging on rank 0 to avoid duplicate logs
-            if not dist.is_initialized() or dist.get_rank() == 0:
-                if self._log_file_path:
-                    root, ext = os.path.splitext(self._log_file_path)
-                    self._nccl_log_file_path = root + "_nccl" + ext
-                    nccl_dir = os.path.dirname(self._nccl_log_file_path)
-                    os.makedirs(nccl_dir, exist_ok=True)
-                    try:
-                        with open(self._nccl_log_file_path, "a") as _:
-                            pass
-                    except OSError as err:
-                        self.logger.warning(f"[Rank {self._get_local_rank()}] Could not create NCCL log file {self._nccl_log_file_path}: {err}")
-                        self._nccl_log_file_path = None
-                    else:
-                        self.logger.debug(f"[Rank {self._get_local_rank()}] Created NCCL log file at {self._nccl_log_file_path}")
-                
-                # Only set NCCL_DEBUG_FILE if we have a valid log file path
-                if hasattr(self, '_nccl_log_file_path') and self._nccl_log_file_path:
-                    os.environ['NCCL_DEBUG_FILE'] = self._nccl_log_file_path
-                    self.logger.info(f"[Rank {self._get_local_rank()}] NCCL debug output will be saved to {self._nccl_log_file_path}")
-                    # Start tailing the log file to show in terminal
-                    self._start_nccl_tail()
-                else:
-                    # Fallback to stderr if no log file could be created
-                    os.environ['NCCL_DEBUG_FILE'] = '/proc/self/fd/2'
-                    self.logger.warning("Falling back to stderr for NCCL logging")
-            else:
-                # On other ranks, disable NCCL debug output to avoid duplicate logs
-                os.environ['NCCL_DEBUG'] = 'WARN'
-                os.environ['NCCL_DEBUG_SUBSYS'] = 'NONE'
-    
         assert torch.cuda.is_available(), ValueError("No CUDA device found")
      
         self.train_dataloader_config = self.dataloader_config.train_dataloader_config 
@@ -190,9 +154,9 @@ class Trainer:
         
         if not dist.is_initialized() or dist.get_rank() == 0:
             self._ascii_art_model_name()
-        
-        self.device = self._get_device()
        
+        self._setup_nccl_logging() 
+        self.device = self._get_device()
         self.model = self._get_model(asdict(self.model_config))
 
         criterion_config_dict = asdict(self.criterion_config)
@@ -292,6 +256,7 @@ class Trainer:
                 )
            
             self._check_dataloader_sampler()      
+
             self.logger.info(f"[GLOBAL] Training {len(self.dataloader) * int(dist.get_world_size())} batches per epoch over all RANKS.")
             self.logger.info(f"[GLOBAL] Training {len(self.dataloader) * self.context_length * int(dist.get_world_size())} tokens per \
                              epoch over all RANKS.")
@@ -302,14 +267,12 @@ class Trainer:
             self.logger.info(f"[Rank {self._get_local_rank()}] Training {len(self.dataloader) * self.context_length} tokens per epoch.")
             self.logger.info(f"[Rank {self._get_local_rank()}] Training {len(self.dataloader) * self.context_length * (self.epochs - start_epoch)} tokens over remaining epochs.")
 
+            self._setup_nccl_logging(_unset = True) 
+            
             if os.name == 'nt':
                 os.system('cls')
-                os.unsetenv('NCCL_DEBUG') 
-                os.unsetenv('NCCL_DEBUG_SUBSYS')
             else:
                 os.system('clear')
-                os.unsetenv('NCCL_DEBUG') 
-                os.unsetenv('NCCL_DEBUG_SUBSYS')         
                 
             self._ascii_art_model_name() 
            
@@ -541,6 +504,7 @@ class Trainer:
     def cleanup(self):
         if hasattr(self, 'tee_handler') and self.tee_handler is not None:
             self.tee_handler.close()
+        self._setup_nccl_logging(_unset=True)
 
     def _clip_grad_norm(self):
         if self.max_grad_norm: 
@@ -967,7 +931,7 @@ class Trainer:
     def _get_local_rank(self):
         if dist.is_initialized():
             return int(os.environ.get('LOCAL_RANK', 0))
-        return 0  # to default to 0 if not initialized
+        return 0
 
     def get_run_id(self):
         user_input = input("Enter Run ID (3 digit integer, e.g. 001): ")
@@ -1066,7 +1030,57 @@ class Trainer:
         ascii_art = fig.renderText(f"{self.model_series_name}")
         colored_art = colored(ascii_art, color='red')
         print(colored_art, flush=True)
- 
+
+    def _setup_nccl_logging(self, _unset=False):
+        """
+        Set up NCCL logging to a single file per node.
+        All GPUs on the same node will log to the same file.
+        No output will be displayed on the terminal.
+        """
+        
+        if not _unset:
+            self._log_file_path = getattr(self, "_log_file_path", None)
+            if self.debug_nccl or self.debug_subsys:
+                if self._get_local_rank() == 0:
+                    if self._log_file_path:
+                        self.logger.info(f"[Rank {self._get_local_rank()}] Attempting to setup NCCL logging to {self._log_file_path}") 
+                        root, ext = os.path.splitext(self._log_file_path)  
+                        self._nccl_log_file_path = f"{root}_nccl{ext}"
+                        nccl_dir = os.path.dirname(self._nccl_log_file_path)
+                        os.makedirs(nccl_dir, exist_ok=True) 
+                        try:
+                            with open(self._nccl_log_file_path, "a"):
+                                pass
+                            self.logger.debug(f"[Rank {self._get_local_rank()}] Created NCCL log file at {self._nccl_log_file_path}")
+                        except OSError as err:
+                            self.logger.warning(f"[Rank {self._get_local_rank()}] Could not create NCCL log file: {err}")
+                            self._nccl_log_file_path = None
+                            return
+            
+                if dist.is_initialized():
+                    dist.barrier()
+            
+                if hasattr(self, '_nccl_log_file_path') and self._nccl_log_file_path:
+                    os.environ['NCCL_DEBUG_FILE'] = self._nccl_log_file_path
+                    self.logger.info(f"[Rank {self._get_local_rank()}] NCCL debug output will be saved to {self._nccl_log_file_path}")
+                
+                    if self.debug_nccl:
+                        os.environ['NCCL_DEBUG'] = self.debug_level
+                    if self.debug_subsys:
+                        os.environ['NCCL_DEBUG_SUBSYS'] = self.debug_subsys
+                
+                    os.environ['NCCL_DEBUG'] = os.environ.get('NCCL_DEBUG', 'WARN')
+                    os.environ['NCCL_DEBUG_FILE'] = self._nccl_log_file_path
+
+        elif _unset:
+            
+            self.logger.info(f"[Rank {self._get_local_rank()}] Unsetting NCCL logging environment variables")
+            os.unsetenv('NCCL_DEBUG_FILE')
+            os.unsetenv('NCCL_DEBUG')
+            os.unsetenv('NCCL_DEBUG_SUBSYS')
+            self.logger.info(f"[Rank {self._get_local_rank()}] No longer logging NCCL") 
+            
+    '''
     def _start_nccl_tail(self):
         """Spawn a daemon thread that tails the NCCL log file and mirrors its
         content to the original stderr so NCCL messages appear in the
@@ -1114,6 +1128,7 @@ class Trainer:
 
         t = threading.Thread(target=_tail, daemon=True, name="NCCL-Log-Tail")
         t.start()
+    '''
 
 @contextmanager
 def supress_logging(logger, disable=None, disable_exclude=None):
