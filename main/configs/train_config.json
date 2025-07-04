@@ -25,6 +25,6 @@
         "hf_repo_type": "model",
         "hf_root_path": "ATHENA_V1_TINY_39.7M/checkpoints"
     },
-    "load_checkpoint": false,
-    "load_checkpoint_path": null
+    "load_checkpoint": true,
+    "load_checkpoint_path": "main/checkpoints/RUN_001/RUN_001_DATETIME_2025-07-03_21-51-50_EPOCH_3_STEP_1353_GLOBAL_STEPS_5424.pt"
 }

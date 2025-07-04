@@ -4,6 +4,7 @@ import torch.optim as opt
 import torch.distributed as dist
 import torch.nn.functional as F
 import logging
+import itertools
 import json
 import math
 import time
@@ -208,216 +209,156 @@ class Trainer:
             json.dump(run_config_dict, f, indent = 4)
         
         self.train_data_root_path = self.train_dataloader_config['train_data_root_path']
- 
+
     def train(self):
-        
         def signal_handler(signum, frame):
             self.logger.info("\nReceived interrupt signal. Cleaning up...")
             self.cleanup()
             self._cleanup()
-            os._exit(0)  
-            
+            os._exit(0)
+        
         signal.signal(signal.SIGINT, signal_handler)
         should_abort = torch.tensor(0, device=self.device)
-        
+
         try:
-            rank = dist.get_rank() 
-            is_main_rank = rank == 0 
+            resume_step  = getattr(self, '_chk_cont_local_steps',   0)
+            start_epoch  = getattr(self, '_chk_cont_epoch',         0)
+            global_steps = getattr(self, '_chk_cont_global_step',   0)
             
-            self._compile_warmup() 
-           
+            rank = dist.get_rank()
+            is_main_rank = (rank == 0)
+
+            self._compile_warmup()
             if is_main_rank:
-                self._init_wandb() 
+                self._init_wandb()
             
             self._check_device_warn()
             
-            if hasattr(self, '_chk_cont_global_step'):
-                global_steps = self._chk_cont_global_step
-                start_epoch = self._chk_cont_epoch
+            if global_steps:
                 self.logger.info(f"[Rank {self._get_local_rank()}] Resuming training from epoch {start_epoch + 1}, global step {global_steps}")
-            else:
-                global_steps = 0
-                start_epoch = 0
-            
+
             X, y = get_data(self.train_data_root_path)
-            
             self.dataloader = get_dataloader(
-                X, 
-                y, 
-                parallelism_type = self.parallel_type, 
-                rank = dist.get_rank(), 
-                batch_size=self.train_dataloader_config['train_batch_size'], 
-                num_workers=self.train_dataloader_config['train_num_workers'], 
-                shuffle=self.train_dataloader_config['train_shuffle'], 
+                X, y,
+                parallelism_type=self.parallel_type,
+                rank=rank,
+                batch_size=self.train_dataloader_config['train_batch_size'],
+                num_workers=self.train_dataloader_config['train_num_workers'],
+                shuffle=self.train_dataloader_config['train_shuffle'],
                 pin_memory=self.train_dataloader_config['train_pin_memory'],
-                )
-           
-            self._check_dataloader_sampler()      
+            )
+            self._check_dataloader_sampler()
 
-            self.logger.info(f"[GLOBAL] Training {len(self.dataloader) * int(dist.get_world_size())} batches per epoch over all RANKS.")
-            self.logger.info(f"[GLOBAL] Training {len(self.dataloader) * self.context_length * int(dist.get_world_size())} tokens per \
-                             epoch over all RANKS.")
-            self.logger.info(f"[GLOBAL] Training {len(self.dataloader) * self.context_length * int(dist.get_world_size()) * (self.epochs - start_epoch)} \
-                             tokens over remaining epochs over all RANKS.")             
-            
-            self.logger.info(f"[Rank {self._get_local_rank()}] Training {len(self.dataloader)} batches per epoch.\n")
-            self.logger.info(f"[Rank {self._get_local_rank()}] Training {len(self.dataloader) * self.context_length} tokens per epoch.")
-            self.logger.info(f"[Rank {self._get_local_rank()}] Training {len(self.dataloader) * self.context_length * (self.epochs - start_epoch)} tokens over remaining epochs.")
+            world_size = int(dist.get_world_size())
+            num_batches = len(self.dataloader)
+            self.logger.info(f"[GLOBAL] Training {num_batches * world_size} batches per epoch over all RANKS.")
+            self.logger.info(f"[GLOBAL] Training {num_batches * self.context_length * world_size} tokens per epoch over all RANKS.")
+            self.logger.info(f"[GLOBAL] Training {num_batches * self.context_length * world_size * (self.epochs - start_epoch)} tokens over remaining epochs.")
+            self.logger.info(f"[Rank {self._get_local_rank()}] Training {num_batches} batches per epoch.")
+            self.logger.info(f"[Rank {self._get_local_rank()}] Training {num_batches * self.context_length} tokens per epoch.")
+            self.logger.info(f"[Rank {self._get_local_rank()}] Training {num_batches * self.context_length * (self.epochs - start_epoch)} tokens over remaining epochs.")
 
-            if self.debug_nccl or self.debug_subsys: # if it was prev set, unset it. 
-                self._setup_nccl_logging(_unset = True)
-            
-            if os.name == 'nt':
-                os.system('cls')
-            else:
-                os.system('clear')
-                
-            self._ascii_art_model_name() 
-           
-            dataloader_iter = enumerate(self.dataloader)
-            
-            if hasattr(self, '_chk_cont_local_steps') and self._chk_cont_local_steps > 0:
-                for _ in range(self._chk_cont_local_steps + 1):
-                    next(dataloader_iter)
-           
+            if self.debug_nccl or self.debug_subsys:
+                self._setup_nccl_logging(_unset=True)
+
+            os.system('cls' if os.name == 'nt' else 'clear')
+            self._ascii_art_model_name()
+
             for epoch in range(start_epoch, self.epochs):
-                self.logger.info(f"[Rank {self._get_local_rank()}] Starting epoch {epoch + 1}/{self.epochs}.") 
-                console_handlers = [h for h in self.logger.handlers if isinstance(h, logging.StreamHandler)]
-                self.logger.info(f"[Rank {self._get_local_rank()}] Console Handlers: {console_handlers}")
-                self.console_handlers = console_handlers
+                self.logger.info(f"[Rank {self._get_local_rank()}] Starting epoch {epoch + 1}/{self.epochs}.")
 
-                '''
-                for _h in console_handlers:
-                    if _h.stream == sys.stderr:
-                        self.logger.info(f"[Rank {self._get_local_rank()}] Keeping stderr Console Handler for progress bar")
-                        break
-                ''' 
-              
-                self.logger.info(f"[Rank {self._get_local_rank()}] Setting up Progress Bar")
-               
-                progress_bar = tqdm(
-                    dataloader_iter,
-                    initial=self._chk_cont_local_steps if hasattr(self, '_chk_cont_local_steps') and epoch == start_epoch else 0,
-                    desc=f"Epoch {epoch + 1}/{self.epochs} | Loss: - | PPLX: - | LR: - | Time: -",
-                    total=len(self.dataloader),
-                    disable=(dist.get_rank()!=0 and self.parallel_type in ['fsdp', 'ddp']),
-                    ascii=False,
-                )
-               
-                self.logger.info(f"[Rank {self._get_local_rank()}] Progress Bar Set Up") 
-                
-                if hasattr(self, '_chk_cont_local_steps') and epoch == start_epoch:
-                    self.logger.info(f"[Rank {self._get_local_rank()}] Resuming training from local step {self._chk_cont_local_steps}")
-                    local_steps = self._chk_cont_local_steps
-                    del self._chk_cont_local_steps
+                if hasattr(self.dataloader, 'sampler') and hasattr(self.dataloader.sampler, 'set_epoch'):
+                    self.dataloader.sampler.set_epoch(epoch)
+
+                if epoch == start_epoch and resume_step > 0:
+                    data_iter     = itertools.islice(self.dataloader, resume_step, None)
+                    total_batches = len(self.dataloader) - resume_step
+                    self.logger.info(f"[Rank {self._get_local_rank()}] Resuming from batch {resume_step}")
                 else:
-                    self.logger.info(f"[Rank {self._get_local_rank()}] Not Resuming training from local step")
-                    local_steps = 0
-               
-                for i, (X, y) in progress_bar:
-                    X, y = X.to(self.device, non_blocking=True), y.to(self.device, non_blocking=True)
-                    
-                    local_steps += 1
-                    
+                    data_iter     = iter(self.dataloader)
+                    total_batches = len(self.dataloader)
+
+                progress_bar = tqdm(
+                    data_iter,
+                    total=total_batches,
+                    desc=f"Epoch {epoch + 1}/{self.epochs} | Loss: - | PPLX: - | LR: -",
+                    disable=(not is_main_rank and self.parallel_type in ['fsdp','ddp']),
+                    ascii=False
+                )
+                local_steps = 0
+
+                for X_batch, y_batch in progress_bar:
+                    X_batch, y_batch = X_batch.to(self.device, non_blocking=True), y_batch.to(self.device, non_blocking=True)
+                    local_steps  += 1
+                    global_steps += 1
+
                     if self.mixed_precision:
-                        with autocast(device_type='cuda', dtype=self.mixed_precision_dtype()):
-                            if is_main_rank:
-                                start_time = time.perf_counter()
-                            logits = self.model(X)
-                            loss = self.criterion(logits.view(-1, logits.size(-1)), y.view(-1))
-                        loss_avg, pplx_avg = self._get_avg_rank_loss_pplx(loss) 
-                        self.scaler.scale(loss_avg).backward() 
+                        with autocast(device_type='cuda', dtype=self.mixed_precision_dtype):
+                            logits = self.model(X_batch)
+                            loss   = self.criterion(logits.view(-1, logits.size(-1)), y_batch.view(-1))
+                        loss_avg, pplx_avg = self._get_avg_rank_loss_pplx(loss)
+                        self.scaler.scale(loss_avg).backward()
                         self.scaler.unscale_(self.optimizer)
                         if self.track_grad_norm:
                             grad_norm_dict = self._get_grad_norm()
                         self._clip_grad_norm()
-                        self.scaler.step(self.optimizer) 
+                        self.scaler.step(self.optimizer)
                         self.scaler.update()
                         self.scheduler.step()
-                        if is_main_rank:
-                            end_time = time.perf_counter()
                     else:
-                        if is_main_rank:
-                            start_time = time.perf_counter()
-                        logits = self.model(X) 
-                        loss = self.criterion(logits.view(-1, logits.size(-1)), y.view(-1))
-                        loss_avg, pplx_avg = self._get_avg_rank_loss_pplx(loss) 
+                        logits = self.model(X_batch)
+                        loss   = self.criterion(logits.view(-1, logits.size(-1)), y_batch.view(-1))
+                        loss_avg, pplx_avg = self._get_avg_rank_loss_pplx(loss)
                         loss_avg.backward()
-                        if is_main_rank:
-                            end_time = time.perf_counter()
-                        self._clip_grad_norm()
                         if self.track_grad_norm:
                             grad_norm_dict = self._get_grad_norm()
+                        self._clip_grad_norm()
                         self.optimizer.step()
                         self.scheduler.step()
-                    
-                    global_steps += 1
-                   
-                    if is_main_rank: 
+
+                    if is_main_rank:
+                        lr = self.scheduler.get_last_lr()[0]
                         progress_bar.set_description(
                             f"Epoch {epoch + 1}/{self.epochs} | "
-                            f"Loss: {loss_avg:.4f} | "
-                            f"PPLX: {pplx_avg:.2f} | "
-                            f"LR: {self.scheduler.get_last_lr()[0]:.2e} | "
-                            f"Time: {end_time - start_time:.5f}s"
+                            f"Loss: {loss_avg:.4f} | PPLX: {pplx_avg:.2f} | LR: {lr:.2e}"
                         )
-                   
-                    if self.wandb_ and is_main_rank: 
-                        wandb_dict = {
-                            "loss": loss_avg,
-                            "perplexity": pplx_avg,
-                        }
-                        
+
+                    if self.wandb_ and is_main_rank:
+                        log_dict = {"loss": loss_avg, "perplexity": pplx_avg}
                         if self.track_grad_norm:
-                            wandb_dict.update(grad_norm_dict)
-                            
-                        wandb.log(wandb_dict, step=global_steps)  
-                   
+                            log_dict.update(grad_norm_dict)
+                        wandb.log(log_dict, step=global_steps)
+
                     if global_steps % self.checkpoint_steps == 0:
-                        dist.barrier() 
-                        self._clr_mem(gc_ = True, cuda_clr_cache = True, X = X, y = y, logits = logits)
-                        dist.barrier() 
-                       
-                        model_state_dict = self._get_model_state_dict()
-                        optim_state_dict = self._get_optim_state_dict() 
-                        scheduler_state_dict = self._get_scheduler_state_dict()                       
-                        
-                        if is_main_rank:
-                            checkpoint_path = os.path.join(self.save_checkpoint_path, f"RUN_{self.run_id}", 
-                                                         f'RUN_{self.run_id}_DATETIME_{self.run_start_date_time}_EPOCH_{epoch}_STEP_{local_steps}_GLOBAL_STEPS_{global_steps}.pt')
-                            
-                            progress_bar.set_description(
-                                f"Epoch {epoch + 1}/{self.epochs} | "
-                                f"Loss: {loss_avg:.4f} | "
-                                f"PPLX: {pplx_avg:.2f} | "
-                                f"LR: {self.scheduler.get_last_lr()[0]:.2e} | "
-                                f"Saving checkpoint..."
-                            )
-                            
-                            self._save_checkpoint(
-                                model_state_dict=model_state_dict,
-                                optim_state_dict=optim_state_dict,
-                                scheduler_state_dict=scheduler_state_dict,
-                                epoch=epoch,
-                                steps=local_steps,
-                                global_steps=global_steps,
-                            )
-                            
-                            progress_bar.set_description(
-                                f"Epoch {epoch + 1}/{self.epochs} | "
-                                f"Loss: {loss_avg:.4f} | "
-                                f"PPLX: {pplx_avg:.2f} | "
-                                f"LR: {self.scheduler.get_last_lr()[0]:.2e} | "
-                                f"Checkpoint saved"
-                            )
-                            
                         dist.barrier()
-                   
+                        self._clr_mem(gc_=True, cuda_clr_cache=True, X=X_batch, y=y_batch, logits=logits)
+                        dist.barrier()
+
+                        model_sd     = self._get_model_state_dict()
+                        optim_sd     = self._get_optim_state_dict()
+                        scheduler_sd = self._get_scheduler_state_dict()
+
+                        if is_main_rank:
+                            ckpt_dir = os.path.join(self.save_checkpoint_path, f"RUN_{self.run_id}")
+                            ckpt_name= f"RUN_{self.run_id}_DATETIME_{self.run_start_date_time}_E{epoch}_S{local_steps}_G{global_steps}.pt"
+                            ckpt_path= os.path.join(ckpt_dir, ckpt_name)
+                            progress_bar.set_description("Saving checkpoint...")
+                            self._save_checkpoint(
+                                model_state_dict    = model_sd,
+                                optim_state_dict    = optim_sd,
+                                scheduler_state_dict= scheduler_sd,
+                                epoch               = epoch,
+                                steps               = local_steps,
+                                global_steps        = global_steps,
+                            )
+                            progress_bar.set_description("Checkpoint saved")
+                        dist.barrier()
+
                     if self.val_steps and (global_steps % self.val_steps == 0):
                         self.model.eval() 
                         if global_steps % self.checkpoint_steps != 0:
                             dist.barrier()
-                            self._clr_mem(gc_ = True, cuda_clr_cache = True, X = X, y = y, logits = logits)
+                            self._clr_mem(gc_=True, cuda_clr_cache=True, X=X_batch, y=y_batch, logits=logits)
                         
                         val_dataloader = self._get_val_dataloader()
                         
@@ -425,34 +366,33 @@ class Trainer:
                         for _h in val_console_handlers:
                             self.logger.removeHandler(_h)
                         
-                        val_progress_bar = tqdm(enumerate(val_dataloader), desc = "Evaluating", total = len(val_dataloader),
-                                            disable = (dist.get_rank()!=0 and self.parallel_type in ['fsdp', 'ddp']), ascii = False)
-                       
-                        # the point of this is to accmulate the loss over the entire validation set 
-                        # and then calculate the average loss over the entire validation set 
-                     
-                        running_accum_val_loss = 0
-                        running_accum_val_pplx = 0
-                        val_steps = 0 
-                      
+                        val_progress_bar = tqdm(
+                            enumerate(val_dataloader),
+                            desc="Evaluating",
+                            total=len(val_dataloader),
+                            disable=(dist.get_rank() != 0 and self.parallel_type in ['fsdp', 'ddp']),
+                            ascii=False
+                        )
+                        
+                        total_val_loss = 0.0
+                        total_val_examples = 0
+                        
                         with torch.no_grad(): 
                             for i, (X_val, y_val) in val_progress_bar:
-                                val_steps += 1 
-                                X_val, y_val = X_val.to(self.device, non_blocking = True), y_val.to(self.device, non_blocking = True)
+                                X_val, y_val = X_val.to(self.device, non_blocking=True), y_val.to(self.device, non_blocking=True)
                                 if self.val_mixed_precision:
-                                    with autocast(device_type = 'cuda', dtype = self.val_mixed_precision_dtype):
+                                    with autocast(device_type='cuda', dtype=self.val_mixed_precision_or_dtype):
                                         if is_main_rank:
                                             start_time = time.perf_counter() 
                                         logits = self.model(X_val)
                                         if is_main_rank:
                                             end_time = time.perf_counter()
                                         loss = F.cross_entropy(
-                                            input = logits.view(-1, logits.size(-1)), 
-                                            target = y_val.view(-1),
-                                            ignore_index = self.criterion_config.ignore_index,
-                                            reduction = 'mean' 
-                                            )
-                                    loss_avg, pplx_avg = self._get_avg_rank_loss_pplx(loss, _val = True)
+                                            input=logits.view(-1, logits.size(-1)), 
+                                            target=y_val.view(-1),
+                                            ignore_index=self.criterion_config.ignore_index,
+                                            reduction='mean' 
+                                        )
                                 else:
                                     if is_main_rank:
                                         start_time = time.perf_counter() 
@@ -460,37 +400,37 @@ class Trainer:
                                     if is_main_rank:
                                         end_time = time.perf_counter()
                                     loss = F.cross_entropy(
-                                        input = logits.view(-1, logits.size(-1)), 
-                                        target = y_val.view(-1),
-                                        ignore_index = self.criterion_config.ignore_index,
-                                        reduction = 'mean'     
-                                        )
-                                    loss_avg, pplx_avg = self._get_avg_rank_loss_pplx(loss, _val = True)
-
-                                running_accum_val_loss += loss_avg
-                                running_accum_val_pplx += pplx_avg
-                              
-                                log_val_loss = running_accum_val_loss / val_steps 
-                                log_val_pplx = running_accum_val_pplx / val_steps 
-                               
-                                if is_main_rank:
-                                    val_progress_bar.set_description(
-                                        f'Evaluating | Loss: {log_val_loss:.4f} | PPLX: {log_val_pplx:.2f} | Time: {end_time - start_time:.5f}s'
+                                        input=logits.view(-1, logits.size(-1)), 
+                                        target=y_val.view(-1),
+                                        ignore_index=self.criterion_config.ignore_index,
+                                        reduction='mean'     
                                     )
+                                batch_size = X_val.size(0)
+                                total_val_loss += loss * batch_size
+                                total_val_examples += batch_size
+                                if is_main_rank:
+                                    val_progress_bar.set_description(f"Evaluating | Time: {end_time - start_time:.5f}s")
 
+                        total_val_loss = total_val_loss.clone().detach()
+                        dist.all_reduce(total_val_loss, op=dist.ReduceOp.SUM)
+                        
+                        total_val_examples = torch.tensor(total_val_examples, dtype=torch.float, device=self.device)
+                        dist.all_reduce(total_val_examples, op=dist.ReduceOp.SUM)
+                        
+                        global_avg_val_loss = total_val_loss / total_val_examples
+                        global_avg_val_pplx = torch.exp(global_avg_val_loss)
+                        
                         if self.wandb_ and is_main_rank:
                             wandb.log({
-                                "val_loss": log_val_loss,
-                                "val_perplexity": log_val_pplx
+                                "val_loss": global_avg_val_loss.item(),
+                                "val_perplexity": global_avg_val_pplx.item()
                             }, step=global_steps)  
-                   
+                    
                         self._clr_mem(
-                            gc_ = True, 
-                            cuda_clr_cache = True, 
-                            X_val = X_val, 
-                            y_val = y_val, 
-                            logits = logits, 
-                            val_dataloader = val_dataloader
+                            gc_=True, 
+                            cuda_clr_cache=True, 
+                            X_val=X_val, 
+                            y_val=y_val
                         ) 
                         
                         for _h in val_console_handlers:
@@ -502,24 +442,17 @@ class Trainer:
 
                 self._restore_console_logging()
 
+                if self.load_checkpoint:
+                    resume_step = 0
+
             self._cleanup()
             self.cleanup()
-
+        
         except Exception as e:
-            should_abort.fill_(1)
-            dist.all_reduce(should_abort, op=dist.ReduceOp.MAX)
-            
-            if should_abort.item() == 1:
-                self.logger.error(f"[Rank {self._get_local_rank()}] An error occurred during training: {e}")
-                self.logger.error(f"[Rank {self._get_local_rank()}] Traceback: \n\n {traceback.format_exc()}")
-                
-                try:
-                    self.cleanup()
-                    self._cleanup()
-                except Exception as cleanup_err:
-                    self.logger.error(f"[Rank {self._get_local_rank()}] Error during cleanup: {cleanup_err}")
-                
-                os._exit(1)
+            self.logger.error(f"[Rank {self._get_local_rank()}] Training failed with exception: {str(e)}")
+            self._cleanup()
+            self.cleanup()
+            raise
 
     def cleanup(self):
         if hasattr(self, 'tee_handler') and self.tee_handler is not None:
@@ -856,9 +789,25 @@ class Trainer:
             wandb_config_dict = asdict(self.wandb_config)
             del wandb_config_dict['extra_args']
 
+            project = self.wandb_config.project 
+            name = self.wandb_config.name 
+            entity = self.wandb_config.entity
+            tags = self.wandb_config.tags
+            notes = self.wandb_config.notes
+            id_ = self.wandb_config.id
+            resume = self.wandb_config.resume
+            
             wandb.init(
-                **wandb_config_dict
+                project = project,
+                name = name,
+                entity = entity,
+                tags = tags,
+                notes = notes,
+                id = id_,
+                resume = resume
             ) 
+           
+            
             self.logger.info(f'[Rank {self._get_local_rank()}] Initialized wandb at local_rank {self._get_local_rank()}')
 
     def _compile_warmup(self):
@@ -1008,7 +957,6 @@ class Trainer:
         self.model.load_state_dict(model_state_dict)
        
         self.logger.info(f"[Rank {self._get_local_rank()}] Loading optimizer state dict") 
-        
         optim_state_dict = checkpoint.get('optim', checkpoint.get('optim_state_dict'))
         if optim_state_dict is not None:
             self.logger.info(f"[Rank {self._get_local_rank()}] Optimizer state dict loaded")

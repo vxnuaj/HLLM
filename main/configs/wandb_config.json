@@ -3,5 +3,7 @@
     "name": "ATHENA_V1_TINY_39.7M",
     "entity": "vxnuaj",
     "tags": ["ATHENA", "39.7M", "PRETRAIN", "TINY", "V1"],
-    "notes": ""
+    "notes": "",
+    "id": "9swps93m",
+    "resume": "allow"
 }

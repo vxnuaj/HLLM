@@ -87,6 +87,8 @@ class WandbConfig:
     entity:str
     tags:list
     notes:str
+    id: str
+    resume:str
     extra_args: dict = field(default_factory = dict)
 
     def __init__(self, **kwargs):
