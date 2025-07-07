@@ -57,7 +57,7 @@ class Trainer:
         debug_nccl:bool = False,
         debug_level:str = 'INFO',
         debug_subsys:bool = False,
-        run_id:int = None, # TODO use this as run_id rather than using info later on.
+        run_id:int = None,
         rm_logs_for_run_id:bool = False,
         ):
        
@@ -89,7 +89,8 @@ class Trainer:
      
         self.train_dataloader_config = self.dataloader_config.train_dataloader_config 
         self.val_dataloader_config = self.dataloader_config.val_dataloader_config 
-       
+      
+        self._save_on_interrupt = self.train_config.save_on_interrupt 
         self.vocab_size = self.train_config.vocab_size 
         self.batch_size = self.train_dataloader_config['train_batch_size'] 
         self.context_length = self.train_config.context_length 
@@ -211,8 +212,24 @@ class Trainer:
         self.train_data_root_path = self.train_dataloader_config['train_data_root_path']
 
     def train(self):
+        z_save = False # for saving checkpoint, under signal_handler - will only save if z = True
         def signal_handler(signum, frame):
             self.logger.info("\nReceived interrupt signal. Cleaning up...")
+            
+            model_sd = self._get_model_state_dict()
+            optimizer_sd = self._get_optimizer_state_dict()
+            scheduler_sd = self._get_scheduler_state_dict() 
+           
+            if z_save and self._save_on_interrupt: 
+                self._save_checkpoint(
+                    model_sd = model_sd,
+                    optimizer_sd = optimizer_sd,
+                    scheduler_sd = scheduler_sd,
+                    epoch = epoch,
+                    global_steps = global_steps,
+                    local_steps = local_steps
+                ) 
+            
             self.cleanup()
             self._cleanup()
             os._exit(0)
@@ -221,9 +238,9 @@ class Trainer:
         should_abort = torch.tensor(0, device=self.device)
 
         try:
-            resume_step  = getattr(self, '_chk_cont_local_steps',   0)
-            start_epoch  = getattr(self, '_chk_cont_epoch',         0)
-            global_steps = getattr(self, '_chk_cont_global_step',   0)
+            resume_step  = getattr(self, '_chk_cont_local_steps', 0)
+            start_epoch  = getattr(self, '_chk_cont_epoch', 0)
+            global_steps = getattr(self, '_chk_cont_global_step', 0)
             
             rank = dist.get_rank()
             is_main_rank = (rank == 0)
@@ -264,7 +281,9 @@ class Trainer:
             os.system('cls' if os.name == 'nt' else 'clear')
             self._ascii_art_model_name()
 
+
             for epoch in range(start_epoch, self.epochs):
+                z_save = True 
                 self.logger.info(f"[Rank {self._get_local_rank()}] Starting epoch {epoch + 1}/{self.epochs}.")
 
                 if hasattr(self.dataloader, 'sampler') and hasattr(self.dataloader.sampler, 'set_epoch'):
@@ -275,7 +294,7 @@ class Trainer:
                     total_batches = len(self.dataloader) - resume_step
                     self.logger.info(f"[Rank {self._get_local_rank()}] Resuming from batch {resume_step}")
                 else:
-                    data_iter     = iter(self.dataloader)
+                    data_iter = iter(self.dataloader)
                     total_batches = len(self.dataloader)
 
                 progress_bar = tqdm(
@@ -327,6 +346,7 @@ class Trainer:
                         log_dict = {"loss": loss_avg, "perplexity": pplx_avg}
                         if self.track_grad_norm:
                             log_dict.update(grad_norm_dict)
+                        self.logger.info(f'GLOBAL STEPS: {global_steps}')
                         wandb.log(log_dict, step=global_steps)
 
                     if global_steps % self.checkpoint_steps == 0:
@@ -334,8 +354,8 @@ class Trainer:
                         self._clr_mem(gc_=True, cuda_clr_cache=True, X=X_batch, y=y_batch, logits=logits)
                         dist.barrier()
 
-                        model_sd     = self._get_model_state_dict()
-                        optim_sd     = self._get_optim_state_dict()
+                        model_sd = self._get_model_state_dict()
+                        optim_sd = self._get_optim_state_dict()
                         scheduler_sd = self._get_scheduler_state_dict()
 
                         if is_main_rank:
@@ -344,12 +364,12 @@ class Trainer:
                             ckpt_path= os.path.join(ckpt_dir, ckpt_name)
                             progress_bar.set_description("Saving checkpoint...")
                             self._save_checkpoint(
-                                model_state_dict    = model_sd,
-                                optim_state_dict    = optim_sd,
-                                scheduler_state_dict= scheduler_sd,
-                                epoch               = epoch,
-                                steps               = local_steps,
-                                global_steps        = global_steps,
+                                model_state_dict = model_sd,
+                                optim_state_dict = optim_sd,
+                                scheduler_state_dict = scheduler_sd,
+                                epoch = epoch,
+                                steps = local_steps,
+                                global_steps = global_steps,
                             )
                             progress_bar.set_description("Checkpoint saved")
                         dist.barrier()
@@ -795,7 +815,6 @@ class Trainer:
             tags = self.wandb_config.tags
             notes = self.wandb_config.notes
             id_ = self.wandb_config.id
-            resume = self.wandb_config.resume
             
             wandb.init(
                 project = project,
@@ -804,9 +823,8 @@ class Trainer:
                 tags = tags,
                 notes = notes,
                 id = id_,
-                resume = resume
+                resume_from = f'{id_}?_step={self._chk_cont_global_step}' if self.load_checkpoint else None # resume from a checkpoing if we definfed it in the train_config.josn.
             ) 
-           
             
             self.logger.info(f'[Rank {self._get_local_rank()}] Initialized wandb at local_rank {self._get_local_rank()}')
 
@@ -946,9 +964,11 @@ class Trainer:
                 dist.init_process_group(backend=original_backend, init_method='env://')
             
     def _load_checkpoint(self, checkpoint_path):
-        checkpoint = torch.load(checkpoint_path, map_location='cpu')
-       
         self.logger.info(f"[Rank {self._get_local_rank()}] Loading checkpoint from {checkpoint_path}") 
+        checkpoint = torch.load(checkpoint_path, map_location='cpu')
+        
+        self.logger.info(f"[Rank {self._get_local_rank()}] Checkpoint loaded") 
+        self.logger.info(f"[Rank {self._get_local_rank()}] Loading model state dict") 
         model_state_dict = checkpoint.get('model', checkpoint.get('model_state_dict'))
         self.logger.info(f"[Rank {self._get_local_rank()}] Model state dict loaded") 
         
@@ -991,11 +1011,19 @@ class Trainer:
                 self.scheduler.load_state_dict(scheduler_state_dict)
             except (ValueError, KeyError) as e:
                 self.logger.warning(f"Could not load scheduler state: {str(e)}. Starting with fresh scheduler state.")
+       
+        global_steps = checkpoint['global_steps'] 
+        local_steps = checkpoint['local_steps']
+        epoch = checkpoint['epoch']
+       
+        assert global_steps, KeyError("global_steps not found in checkpoint") 
+        assert local_steps, KeyError("local_steps not found in checkpoint") 
+        assert epoch, KeyError("epoch not found in checkpoint") 
         
         return (
-            checkpoint.get('epoch', 0),
-            checkpoint.get('global_step', 0),
-            checkpoint.get('local_steps', 0)
+            epoch,
+            global_steps,
+            local_steps
         )
 
     def _build_param_groups(self, model: nn.Module, optim_cfg: dict):

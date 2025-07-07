@@ -1,5 +1,5 @@
-- [ ] need to verify that we can run validation
-  - [ ] Why is validation loss so low compared to the training loss, at the beginning of training?
-- [ ] Batch Size - Stress test VRAM to proper batch size for the dataloader_config.json
-- [ ] Figure out final training configs for the model.
-- [ ] Run a quick test ( with val / checkpointing ) at shorter timestep -> then reset to proper vals.
+- [ ] Need to figure out continuing from checkpointing
+  - [ ] do we have any hangs we need to fix?
+  - [ ] is wandb continuing?
+  - [ ] turn on save on interrupt
+  - [ ] resume training

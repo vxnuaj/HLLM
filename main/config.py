@@ -30,6 +30,7 @@ class TrainingConfig:
     log_root_path: Optional[str] = None
     load_checkpoint: bool = False
     load_checkpoint_path: Optional[str] = None
+    save_on_interrupt: bool = False
     extra_args: Dict[str, Any] = field(default_factory=dict)
 
     def __init__(self, **kwargs):
@@ -88,7 +89,6 @@ class WandbConfig:
     tags:list
     notes:str
     id: str
-    resume:str
     extra_args: dict = field(default_factory = dict)
 
     def __init__(self, **kwargs):
