@@ -183,7 +183,8 @@ class Trainer:
         
         if self.wandb_:
             self.logger.info(f"[Rank {self._get_local_rank()}] Logging to wandb project {self.wandb_config.project} as {self.wandb_config.name}_RUN_{self.run_id}")
-            wandb.login(key = self.wandb_token) 
+            if not dist.is_initialized() or dist.get_rank() == 0:
+                wandb.login(key = self.wandb_token) 
         if self.save_hf:
             self.logger.info(f"[Rank {self._get_local_rank()}] Logging to hugging face repo {self.hf_repo_id}")
             hf_login(token = self.hf_token) 
@@ -212,6 +213,9 @@ class Trainer:
         self.train_data_root_path = self.train_dataloader_config['train_data_root_path']
 
     def train(self):
+        rank = dist.get_rank()
+        is_main_rank = (rank == 0)
+       
         z_save = False # for saving checkpoint, under signal_handler - will only save if z = True
         def signal_handler(signum, frame):
             self.logger.info("\nReceived interrupt signal. Cleaning up...")
@@ -229,6 +233,9 @@ class Trainer:
                     global_steps = global_steps,
                     local_steps = local_steps
                 ) 
+        
+            if is_main_rank:
+                wandb.finish()
             
             self.cleanup()
             self._cleanup()
@@ -242,10 +249,8 @@ class Trainer:
             start_epoch  = getattr(self, '_chk_cont_epoch', 0)
             global_steps = getattr(self, '_chk_cont_global_step', 0)
             
-            rank = dist.get_rank()
-            is_main_rank = (rank == 0)
-
             self._compile_warmup()
+
             if is_main_rank:
                 self._init_wandb()
             
@@ -801,6 +806,8 @@ class Trainer:
     
     def _init_wandb(self):
         if self.wandb_:
+            if dist.is_initialized() and dist.get_rank() != 0:
+                return
             
             self.logger.info(f'[Rank {self._get_local_rank()}] Initializing wandb | Project: {self.wandb_config.project} | Run: {self.wandb_config.name}_RUN_{self.run_id} at local_rank {self._get_local_rank()}')
             assert isinstance(self.wandb_config, WandbConfig), ValueError('wandb_config must be type WandbConfig')
@@ -814,7 +821,7 @@ class Trainer:
             entity = self.wandb_config.entity
             tags = self.wandb_config.tags
             notes = self.wandb_config.notes
-            id_ = self.wandb_config.id
+            id_ = self.wandb_config.id # OPTIONAL PARAMETER - if in thew andb_config.json, i don't have this specified we won't resume from the same fun
             
             wandb.init(
                 project = project,
