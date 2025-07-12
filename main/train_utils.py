@@ -288,7 +288,6 @@ class Trainer:
 
 
             for epoch in range(start_epoch, self.epochs):
-                z_save = True 
                 self.logger.info(f"[Rank {self._get_local_rank()}] Starting epoch {epoch + 1}/{self.epochs}.")
 
                 if hasattr(self.dataloader, 'sampler') and hasattr(self.dataloader.sampler, 'set_epoch'):
@@ -353,6 +352,8 @@ class Trainer:
                             log_dict.update(grad_norm_dict)
                         self.logger.info(f'GLOBAL STEPS: {global_steps}')
                         wandb.log(log_dict, step=global_steps)
+
+                    z_save = True 
 
                     if global_steps % self.checkpoint_steps == 0:
                         dist.barrier()
@@ -481,14 +482,15 @@ class Trainer:
                 scheduler_state_dict = scheduler_sd,
                 epoch = self.epochs,
                 global_steps = global_steps,
-                local_steps = local_steps,
-            ) 
+                steps = local_steps,
+           ) 
 
             self._cleanup()
             self.cleanup()
         
         except Exception as e:
             self.logger.error(f"[Rank {self._get_local_rank()}] Training failed with exception: {str(e)}")
+            wandb.finish(exit_code = 1) # meaning the run failed | ffs.
             self._cleanup()
             self.cleanup()
             raise
