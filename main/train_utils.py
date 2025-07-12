@@ -377,6 +377,7 @@ class Trainer:
                                 global_steps = global_steps,
                             )
                             progress_bar.set_description("Checkpoint saved")
+                            
                         dist.barrier()
 
                     if self.val_steps and (global_steps % self.val_steps == 0):
@@ -469,6 +470,19 @@ class Trainer:
 
                 if self.load_checkpoint:
                     resume_step = 0
+            
+            model_sd = self._get_model_state_dict()
+            optim_sd = self._get_optim_state_dict()
+            scheduler_sd = self._get_scheduler_state_dict() 
+            
+            self._save_checkpoint(
+                model_state_dict = model_sd,
+                optim_state_dict = optim_sd,
+                scheduler_state_dict = scheduler_sd,
+                epoch = self.epochs,
+                global_steps = global_steps,
+                local_steps = local_steps,
+            ) 
 
             self._cleanup()
             self.cleanup()
@@ -669,6 +683,8 @@ class Trainer:
                  'optim_state_dict': optim_state_dict, 'scheduler_state_dict': scheduler_state_dict},
                 f = os.path.join(root_path, f'RUN_{self.run_id}_DATETIME_{self.run_start_date_time}_EPOCH_{epoch}_STEP_{steps}_GLOBAL_STEPS_{global_steps}.pt')
             ) 
+          
+        del model_state_dict, optim_state_dict, scheduler_state_dict 
            
         self.logger.info(f"[Rank {self._get_local_rank()}] Saved checkpoint at epoch {epoch} and global steps {global_steps}.") 
         
@@ -726,7 +742,7 @@ class Trainer:
                 raise 
         
             self.logger.info(f"[Rank {self._get_local_rank()}] Saved checkpoint at epoch {epoch} and global steps {global_steps} to hugging face.")
-        
+       
         elif self.save_hf and not self.hf_repo_exists:
             
             self.logger.info(f"[Rank {self._get_local_rank()}] Creating hugging face repo at {self.hf_repo_id}") 
@@ -763,6 +779,8 @@ class Trainer:
                 steps = steps,
                 global_steps = global_steps
             )
+            
+            del model_state_dict, optim_state_dict, scheduler_state_dict
           
     def _get_mixed_precision_dtype(self, mixed_precision_dtype=None):
       
