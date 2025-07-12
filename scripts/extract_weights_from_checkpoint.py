@@ -12,7 +12,7 @@ import torch
 import argparse
 import os
 from dotenv import load_dotenv
-from huggingface_hub import HfApi, hf_login
+from huggingface_hub import HfApi, login as hf_login
 
 load_dotenv()
 
