@@ -696,8 +696,6 @@ class Trainer:
 
             self.logger.info(f"[Rank {self._get_local_rank()}] Saving checkpoint to hugging face at epoch {epoch} and global steps {global_steps}.")
 
-            self.logger.info(f"[Rank {self._get_local_rank()}] Saving checkpoint to hugging face at epoch {epoch} and global steps {global_steps}.")
-
             assert self.hf_repo_id is not None, ValueError('hf_repo_id must be specified')
             assert self.hf_root_path is not None, ValueError('hf_root_path must be specified')
             
