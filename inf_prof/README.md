@@ -23,7 +23,7 @@
 - Model Execution Backend
 	- torch.compile
 		- inductor
-		- nvfuser
+		- eager 
 		- aot_eager
 	- onnx runtime
 	- tensorrt
