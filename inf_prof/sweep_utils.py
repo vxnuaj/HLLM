@@ -272,7 +272,7 @@ def quantize(
             for name in subset:
                 gptq[name] = GPTQ(subset[name])
                 gptq[name].quantizer = Quantizer()
-                gptq[name].quantizer.configure(wbits, perchannel=True, sym=False, mse=False)
+                gptq[name].quantizer.configure(wbits, perchannel=True, sym=False, mse=True)
             
             def add_batch(name):
                 def tmp(_, inp, out):
