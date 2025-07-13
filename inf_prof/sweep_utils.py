@@ -183,6 +183,7 @@ def quantize(
     TODO 
     - [ ] gptq
         - [ ] test if it works with model
+        - [ ] cleanup code
     - [ ] awq
     - [ ] gguf
     - [ ] exl12
