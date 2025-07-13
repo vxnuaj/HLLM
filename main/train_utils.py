@@ -1,3 +1,11 @@
+'''
+
+TODO;
+
+- [ ] add resume trianing ( not rewiding ) via wandb
+
+'''
+
 import torch
 import torch.nn as nn
 import torch.optim as opt
@@ -467,23 +475,24 @@ class Trainer:
                 
                 dataloader_iter = enumerate(self.dataloader)
 
-                self._restore_console_logging()
-
                 if self.load_checkpoint:
                     resume_step = 0
-            
-            model_sd = self._get_model_state_dict()
-            optim_sd = self._get_optim_state_dict()
-            scheduler_sd = self._get_scheduler_state_dict() 
-            
-            self._save_checkpoint(
-                model_state_dict = model_sd,
-                optim_state_dict = optim_sd,
-                scheduler_state_dict = scheduler_sd,
-                epoch = self.epochs,
-                global_steps = global_steps,
-                steps = local_steps,
-           ) 
+           
+
+            self._restore_console_logging()            
+            if is_main_rank:            
+                model_sd = self._get_model_state_dict()
+                optim_sd = self._get_optim_state_dict()
+                scheduler_sd = self._get_scheduler_state_dict() 
+
+                self._save_checkpoint(
+                    model_state_dict = model_sd,
+                    optim_state_dict = optim_sd,
+                    scheduler_state_dict = scheduler_sd,
+                    epoch = self.epochs,
+                    global_steps = global_steps,
+                    steps = local_steps,
+            ) 
 
             self._cleanup()
             self.cleanup()
