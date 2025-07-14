@@ -8,9 +8,9 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'b
 
 from blocks import TransformerBlock, PositionalEmbedding
 
-class LLaMA(nn.Module):
+class Athena(nn.Module):
     """
-    THe LlaMA architecture, supporting various attention types and positional embeddings.
+    THe Athena architecture, supporting various attention types and positional embeddings.
 
     Attributes:
         context_len (int): Maximum sequence length the model can process.
@@ -59,7 +59,7 @@ class LLaMA(nn.Module):
         ):
         
         """
-        Initializes the LLaMA model.
+        Initializes the Athena model.
 
         Args:
             context_len (int): Maximum sequence length.
@@ -154,7 +154,7 @@ class LLaMA(nn.Module):
   
     def forward(self, x, _inference: bool = False):
         """
-        Processes the input through the SmolLLaMA model to generate logits over the vocabulary.
+        Processes the input through the SmolAthena model to generate logits over the vocabulary.
 
         Args:
             x (torch.Tensor): Input tensor of shape (batch_size, sequence_length) containing token indices.

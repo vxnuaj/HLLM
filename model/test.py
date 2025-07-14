@@ -7,7 +7,7 @@ from pathlib import Path
 from pprint import pprint
 from torchinfo import summary
 
-from model import LLaMA
+from model import Athena
 
 # Load model configuration from JSON
 config_path = Path(__file__).parent.parent / 'main' / 'configs' / 'model_config.json'
@@ -43,7 +43,7 @@ model_name = config['model_name']
 model_series_name = config['model_series_name']
 
 # Create model with config
-model = LLaMA(
+model = Athena(
     context_len=context_len,
     d_model=d_model,
     n_heads=n_heads,

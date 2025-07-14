@@ -1,12 +1,6 @@
 import torch
 import torch.nn as nn
 
-try:
-    import quant_cuda
-except:
-    print('CUDA extension not installed.')
-
-
 def quantize(x, scale, zero, maxq):
     q = torch.clamp(torch.round(x / scale) + zero, 0, maxq)
     return scale * (q - zero)
@@ -173,6 +167,12 @@ class Quant4Linear(nn.Module):
 
     def __init__(self, linear, scales, zeros):
         super().__init__()
+        
+        try:
+           import quant_cuda
+        except:
+            raise ImportError("quant_cuda not found")
+        
         self.register_buffer('zeros', zeros.clone() * scales)
         self.register_buffer('scales', scales)
         self.register_buffer('bias', linear.bias.data)

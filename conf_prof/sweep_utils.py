@@ -27,7 +27,7 @@ from torch.optim import Adam
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from model.blocks import TransformerBlock
-from model.model import LLaMA
+from model.model import Athena
 
 def load_config(path: str):
     with open(path, 'r') as f:
@@ -242,7 +242,7 @@ def run_profs(
 
         for i, cfg in enumerate(track(sequences = config_group, description = f"Sweeping Hyperparameters | Running {parallel_type.upper()} configs")):
             try:
-                model = LLaMA(**cfg).to(device)
+                model = Athena(**cfg).to(device)
                 model.train()
 
                 use_mixed_precision = cfg.get("mixed_precision", False)

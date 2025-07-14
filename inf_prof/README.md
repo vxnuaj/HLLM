@@ -30,3 +30,23 @@
 	- vllm
 - Decoding
 	- Speculative Decoding ( distill the model into a model that’s 4x smaller ).
+
+
+### Quantize
+
+If you're going to run awq, start a venv and then `pip install -e package/llm-awq`.
+
+```zsh
+python -m venv awq_venv
+source awq_venv/bin/activate
+pip install -e package/llm-awq
+```
+
+then
+
+```zsh
+cd awq/kernels
+python setup.py install
+```
+
+not needed for other quantization methods.

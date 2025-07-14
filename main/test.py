@@ -15,7 +15,7 @@ from config import ModelConfig, CriterionConfig, DataloaderConfig
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'model')))
 
-from model import LLaMA
+from model import Athena
 
 def setup_logger():
     logger = logging.getLogger(__name__)
@@ -95,7 +95,7 @@ class Tester:
         return torch.device(f'cuda:{self.local_rank}' if torch.cuda.is_available() else 'cpu')
     
     def _get_model(self, model_config):
-        model = LLaMA(**model_config)
+        model = Athena(**model_config)
         model = model.to(self.device)
         
         if self.parallel_type == 'ddp' and self.world_size > 1:

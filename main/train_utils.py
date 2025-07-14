@@ -48,7 +48,7 @@ from huggingface_hub import HfApi, create_repo, login as hf_login
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'model')))
 
-from model import LLaMA
+from model import Athena
 from blocks import TransformerBlock
 from dotenv import load_dotenv
 
@@ -583,7 +583,7 @@ class Trainer:
             
     def _get_model(self, model_config):
         self.logger.info(f"[Rank {self._get_local_rank()}] Initializing Model")
-        model = LLaMA(**model_config)
+        model = Athena(**model_config)
 
         if self._compile:
             self.logger.info(f"[Rank {self._get_local_rank()}] Compiling Model")
@@ -1067,7 +1067,7 @@ class Trainer:
           1. params with weight decay (all parameters except biases & 1-D like layer-norm weights)
           2. params without weight decay (biases & layer-norm/embedding weights)
 
-        This matches the commonly used GPT/LLaMA weight-decay scheme and guarantees
+        This matches the commonly used GPT/Athena weight-decay scheme and guarantees
         we always end up with exactly two param groups, independent of model size,
         so `load_state_dict` never complains about a group-count mismatch.
         """
