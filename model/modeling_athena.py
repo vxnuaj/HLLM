@@ -34,10 +34,10 @@ class AthenaForCausalLM(PreTrainedModel):
         super().__init__(config)
         self.config = config
         
-        # Initialize model components
+        
         self._init_model_components()
         
-        # Initialize weights
+        
         self.post_init()
     
     def _init_model_components(self):
@@ -45,7 +45,7 @@ class AthenaForCausalLM(PreTrainedModel):
         self._supress_warnings(self.config.supress_warnings)
         self._check_pos_emb_type(self.config.pos_emb_type)
         
-        # Store config values as instance variables for backward compatibility
+        
         self.context_len = self.config.context_len
         self.d_model = self.config.d_model
         self.n_heads = self.config.n_heads
@@ -66,7 +66,7 @@ class AthenaForCausalLM(PreTrainedModel):
         self.model_name = self.config.model_name
         self.verbose = self.config.verbose
         
-        # Model layers
+        
         self.embeddings = nn.Embedding(
             num_embeddings=self.vocab_size,
             embedding_dim=self.d_model
@@ -101,7 +101,7 @@ class AthenaForCausalLM(PreTrainedModel):
         self.rmsnorm = nn.RMSNorm(normalized_shape=self.d_model)
         self.linear = nn.Linear(self.d_model, self.vocab_size, bias=False)
         
-        # Tie weights
+        
         self.linear.weight = self.embeddings.weight
     
     def get_input_embeddings(self):
@@ -156,7 +156,7 @@ class AthenaForCausalLM(PreTrainedModel):
         )
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
         
-        # Determine input
+        
         if input_ids is not None:
             batch_size, seq_len = input_ids.shape
             x = self.embeddings(input_ids)
@@ -166,28 +166,27 @@ class AthenaForCausalLM(PreTrainedModel):
         else:
             raise ValueError("You have to specify either input_ids or inputs_embeds")
         
-        # Apply positional embeddings
         if self.pos_emb_type == 'pe':
             x = self.pe(x, _inference=use_cache)
         
-        # Pass through transformer blocks
+        
         for i, block in enumerate(self.block):
             x = block(x, _inference=use_cache)
         
-        # Apply final layer norm and output projection
+        
         x = self.rmsnorm(x)
         logits = self.linear(x)
         
         loss = None
         if labels is not None:
-            # Shift so that tokens < n predict n
+            
             shift_logits = logits[..., :-1, :].contiguous()
             shift_labels = labels[..., 1:].contiguous()
-            # Flatten the tokens
+            
             loss_fct = nn.CrossEntropyLoss()
             shift_logits = shift_logits.view(-1, self.config.vocab_size)
             shift_labels = shift_labels.view(-1)
-            # Enable model parallelism
+            
             shift_labels = shift_labels.to(shift_logits.device)
             loss = loss_fct(shift_logits, shift_labels)
         
@@ -210,7 +209,7 @@ class AthenaForCausalLM(PreTrainedModel):
         if past_key_values is not None:
             input_ids = input_ids[:, -1:]
         
-        # if `inputs_embeds` are passed, we only want to use them in the 1st generation step
+        
         if inputs_embeds is not None and past_key_values is None:
             model_inputs = {"inputs_embeds": inputs_embeds}
         else:

@@ -37,19 +37,19 @@ def convert_model_weights(original_model: Athena, hf_model: AthenaForCausalLM):
     original_state_dict = original_model.state_dict()
     hf_state_dict = hf_model.state_dict()
     
-    # Create a proper mapping between original and HF model keys
+    
     weight_mapping = {}
     
-    # Map embedding layers
+    
     if "embeddings.weight" in original_state_dict:
         weight_mapping["embeddings.weight"] = "embeddings.weight"
     
-    # Map transformer blocks
+    
     for i in range(original_model.n_blocks):
         orig_prefix = f"block.{i}"
         hf_prefix = f"block.{i}"
         
-        # Map attention layers
+        
         attention_mappings = {
             f"{orig_prefix}.attn.linearQ.weight": f"{hf_prefix}.attn.linearQ.weight",
             f"{orig_prefix}.attn.linearK.weight": f"{hf_prefix}.attn.linearK.weight",
@@ -57,14 +57,14 @@ def convert_model_weights(original_model: Athena, hf_model: AthenaForCausalLM):
             f"{orig_prefix}.attn.linear_out.weight": f"{hf_prefix}.attn.linear_out.weight",
         }
         
-        # Map feedforward layers
+        
         ff_mappings = {
             f"{orig_prefix}.swiglu.swiglu_linear.weight": f"{hf_prefix}.swiglu.swiglu_linear.weight",
             f"{orig_prefix}.swiglu.swiglu_gate_linear.weight": f"{hf_prefix}.swiglu.swiglu_gate_linear.weight",
             f"{orig_prefix}.swiglu.linear_out.weight": f"{hf_prefix}.swiglu.linear_out.weight",
         }
         
-        # Map normalization layers
+        
         norm_mappings = {
             f"{orig_prefix}.rmsnorm1.weight": f"{hf_prefix}.rmsnorm1.weight",
             f"{orig_prefix}.rmsnorm2.weight": f"{hf_prefix}.rmsnorm2.weight",
@@ -74,14 +74,14 @@ def convert_model_weights(original_model: Athena, hf_model: AthenaForCausalLM):
         weight_mapping.update(ff_mappings)
         weight_mapping.update(norm_mappings)
     
-    # Map final layers
+    
     final_mappings = {
         "rmsnorm.weight": "rmsnorm.weight",
         "linear.weight": "linear.weight",
     }
     weight_mapping.update(final_mappings)
     
-    # Apply the weight mapping
+    
     converted_weights = {}
     missing_keys = []
     
@@ -100,17 +100,17 @@ def convert_model_weights(original_model: Athena, hf_model: AthenaForCausalLM):
             missing_keys.append(original_key)
             print(f"✗ Could not find mapping for {original_key}")
     
-    # Check for any keys we missed
+    
     for key in hf_state_dict.keys():
         if key not in converted_weights:
             print(f"⚠ HF model key not mapped: {key}")
     
-    # Load the converted weights
+    
     hf_model.load_state_dict(converted_weights, strict=False)
     
     if missing_keys:
         print(f"\n⚠ Warning: {len(missing_keys)} keys could not be mapped:")
-        for key in missing_keys[:5]:  # Show first 5
+        for key in missing_keys[:5]:  
             print(f"  - {key}")
         if len(missing_keys) > 5:
             print(f"  ... and {len(missing_keys) - 5} more")
@@ -123,7 +123,7 @@ def main():
     parser.add_argument('--model_weights_path', type=str, required=True, help='Path to trained model weights (.pth file)')
     parser.add_argument('--save_path', type=str, required=True, help='Path to save the converted HuggingFace model')
     parser.add_argument('--hf_model_repo', type=str, help='HuggingFace model repository to push to (optional)')
-    parser.add_argument('--tokenizer_path', type=str, help='Path to tokenizer (optional)')
+    parser.add_argument('--tokenizer_path', type=str, required=True, help='Path to tokenizer')
     parser.add_argument('--test_generation', action='store_true', help='Test the converted model with generation')
     
     args = parser.parse_args()
@@ -161,60 +161,41 @@ def main():
         loaded_model = AutoModelForCausalLM.from_pretrained(args.save_path, trust_remote_code=True)
         loaded_config = AutoConfig.from_pretrained(args.save_path, trust_remote_code=True)
         
-        print(f"✓ Successfully loaded model with AutoModelForCausalLM!")
-        print(f"  Model type: {type(loaded_model)}")
-        print(f"  Config type: {type(loaded_config)}")
+        print("Successfully loaded model with AutoModelForCausalLM!")
+        print(f"Model type: {type(loaded_model)}")
+        print(f"Config type: {type(loaded_config)}")
         
         test_input = torch.randint(0, loaded_config.vocab_size, (1, 10))
         with torch.no_grad():
             outputs = loaded_model(test_input)
-        print(f"  Output shape: {outputs.logits.shape}")
+        print(f"Output shape: {outputs.logits.shape}")
         
     except Exception as e:
-        print(f"✗ Error testing model loading: {e}")
+        print(f"Error testing model loading: {e}")
         return
     
     if args.test_generation:
         print("Testing text generation...")
         try:
-            if args.tokenizer_path:
-                tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_path)
-            else:
-                print("No tokenizer provided, using dummy tokens for generation test")
-                tokenizer = None
-            
+            tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_path)
             model = loaded_model
             model.eval()
             
-            if tokenizer:
-                test_text = "Once upon a time"
-                inputs = tokenizer(test_text, return_tensors="pt")
-                
-                with torch.no_grad():
-                    outputs = model.generate(
-                        inputs.input_ids,
-                        max_length=50,
-                        num_return_sequences=1,
-                        temperature=0.7,
-                        do_sample=True,
-                        pad_token_id=tokenizer.eos_token_id
-                    )
-                
-                generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
-                print(f"Generated text: {generated_text}")
-            else:
-                # Test with dummy input
-                dummy_input = torch.randint(0, model.config.vocab_size, (1, 5))
-                with torch.no_grad():
-                    outputs = model.generate(
-                        dummy_input,
-                        max_length=20,
-                        num_return_sequences=1,
-                        temperature=0.7,
-                        do_sample=True,
-                        pad_token_id=model.config.eos_token_id or 2
-                    )
-                print(f"Generated tokens: {outputs[0].tolist()}")
+            test_text = "Once upon a time"
+            inputs = tokenizer(test_text, return_tensors="pt")
+            
+            with torch.no_grad():
+                outputs = model.generate(
+                    inputs.input_ids,
+                    max_length=50,
+                    num_return_sequences=1,
+                    temperature=0.7,
+                    do_sample=True,
+                    pad_token_id=tokenizer.eos_token_id
+                )
+            
+            generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
+            print(f"Generated text: {generated_text}")
             
         except Exception as e:
             print(f"Error during generation test: {e}")

@@ -1,5 +1,5 @@
 mixed_precision_dtype: ["fp16", "bfloat16", "fp8", "bfloat8", "int8", "int4", None]
-quantization_dtype: []
+quantization_dtype: [3, 4, 8]
 quantization_method: ["gptq", "awq", "gguf", "exl12", "bitsandbytes"]
 quantize_kvcache: ["float16", "bfloat16", "float8", "bfloat8", "int8", "int4", None]
 model_execution_backend: ["torch.compile", "onnxruntime", "tensorrt", "vllm"]
