@@ -19,17 +19,22 @@ import json
 import itertools
 import logging
 
-from typing import Union
+from transformers import PreTrainedTokenizerFast, AutoTokenizer
+from huggingface_hub import login as hf_login
+from typing import Dict, Optional
 from tqdm import tqdm
+from dotenv import load_dotenv
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'model')))
 
-from model import Athena
-from quantize import quantize_gptq
+from transformers import AutoModelForCausalLM
 
 logger = logging.getLogger(__name__)
 
-def load_config(config_path, id = None):
+load_dotenv()
+hf_login(os.getenv("HF_TOKEN"))
+
+def load_config(config_path, id = None) -> Dict:
     assert id is not None, ValueError("id must not be None")
     if config_path.endswith("json"):
         with open(config_path, 'r') as f:
@@ -38,13 +43,71 @@ def load_config(config_path, id = None):
         with open(config_path, 'r') as f:
             config = yaml.safe_load(f)
     logger.info(f"Loading {id} config from {config_path}.")
-    return config
+    return config # -> dict
 
-def load_weights_model(model, weights_path, load_model_weights = True):
-    model_weights = torch.load(weights_path, weights_only = True )
-    if load_model_weights:
+def load_tokenizer(tokenizer_path, **kwargs):
+  
+    '''
+    Load a tokenizer from huggingface model hub or local file
+    
+    Parameters
+    ----------
+    tokenizer_path : str
+        The path to the tokenizer file.
+    **kwargs
+        Additional keyword arguments to pass to the tokenizer's from_pretrained method.
+    
+    Returns
+    -------
+    tokenizer : transformers.PreTrainedTokenizerFast or transformers.AutoTokenizer
+        The loaded tokenizer.
+    '''
+    
+    if type == "PreTrainedTokenizerFast":
+        tokenizer = PreTrainedTokenizerFast.from_pretrained(tokenizer_path, **kwargs)
+    elif type == "AutoTokenizer":
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, **kwargs)
+    
+    return tokenizer
+
+def load_model(
+    model_path:str = None, 
+    model:Optional = None, 
+    return_model_weights:bool = True, 
+    load_from_hf:bool = True, 
+    return_tokenizer:bool = False, 
+    load_tokenizer_config:dict = None
+    ):
+  
+    tokenizer_path = load_tokenizer_config.pop("tokenizer_path")
+   
+    if return_tokenizer:
+        tokenizer = load_tokenizer(tokenizer_path, **load_tokenizer_config)
+ 
+    if not load_from_hf: 
+        logger.info(f"Loading model weights from {model_path} from local.")
+        model_weights = torch.load(model_path, map_location=torch.device('cpu'), weights_only = True)
         model.load_state_dict(model_weights)
+        
+        if not return_model_weights:
+            del model_weights
+        
+    else:
+        logger.info(f"Loading model from {model_path} from huggingface.")
+        model = AutoModelForCausalLM.from_pretrained(model_path)
+        model_weights = model.load_state_dict(torch.load(model_path, map_location=torch.device('cpu'), weights_only = True))
+        
+        if not return_model_weights:
+            del model_weights
+
+    if return_model_weights and return_tokenizer:
+        return model, tokenizer, model_weights
+    elif return_model_weights and not return_tokenizer:
         return model, model_weights
+    elif not return_model_weights and return_tokenizer:
+        return model, tokenizer
+    else:
+        return model
  
 def create_combinations(sweep_config):
     '''
@@ -54,6 +117,40 @@ def create_combinations(sweep_config):
     '''
 
     logger.info(f"Computing the cartesian product over all possible base inference configurations.")
+    
+    mp_dtype_count = len([dtype for dtype in sweep_config['mixed_precision_dtype'] if dtype is not None])
+    q_dtype_count = len([dtype for dtype in sweep_config['quantization_wbits'] if dtype is not None])
+    q_method_count = len([method for method in sweep_config['quantization_method'] if method is not None])
+    kvcache_count = len(sweep_config['quantize_kvcache'])
+    backend_count = len(sweep_config['model_execution_backend'])
+    decoding_count = len(sweep_config['decoding'])
+    
+    mixed_precision_base_count = mp_dtype_count * kvcache_count * backend_count * decoding_count 
+    quantization_base_count = q_dtype_count * q_method_count * kvcache_count * backend_count * decoding_count 
+    neither_base_count = kvcache_count * backend_count * decoding_count 
+    
+    total_base_combinations = mixed_precision_base_count + quantization_base_count + neither_base_count
+    
+    torch_compile_backend_count = len(sweep_config['torch_compile_backend'])
+    torch_compile_mode_count = len(sweep_config['torch_compile_mode'])
+    
+    torch_compile_combinations = ( # not multiplying by model_execution_backend because for torch.compile it is fixed to torch.compile (or * 1)
+        mp_dtype_count * kvcache_count * decoding_count +  
+        q_dtype_count * q_method_count * kvcache_count * decoding_count +  
+        kvcache_count * decoding_count 
+    )
+    
+    torch_compile_expanded_count = torch_compile_combinations * torch_compile_backend_count * torch_compile_mode_count
+    non_torch_compile_count = total_base_combinations - torch_compile_combinations
+    total_final_combinations = torch_compile_expanded_count + non_torch_compile_count
+    
+    logger.info(f"Base combinations: {total_base_combinations}")
+    logger.info(f"Torch.compile base combinations: {torch_compile_combinations}")
+    logger.info(f"Torch.compile expanded combinations: {torch_compile_expanded_count}")
+    logger.info(f"Non-torch.compile combinations: {non_torch_compile_count}")
+    logger.info(f"Total final combinations: {total_final_combinations}")
+    
+    final_combinations = []
     
     mixed_precision_combinations = itertools.product(
         [dtype for dtype in sweep_config['mixed_precision_dtype'] if dtype is not None], 
@@ -66,8 +163,8 @@ def create_combinations(sweep_config):
     
     quantization_combinations = itertools.product(
         [None], 
-        [dtype for dtype in sweep_config['quantization_dtype'] if dtype is not None],  
-        sweep_config['quantization_method'],
+        [dtype for dtype in sweep_config['quantization_wbits'] if dtype is not None],  
+        [method for method in sweep_config['quantization_method'] if method is not None],  
         sweep_config['quantize_kvcache'],
         sweep_config['model_execution_backend'],
         sweep_config['decoding']
@@ -82,157 +179,137 @@ def create_combinations(sweep_config):
         sweep_config['decoding']
     )
     
-    base_combinations = itertools.chain(mixed_precision_combinations, quantization_combinations, neither_combinations)
-  
-    all_configs = []
-    torch_compile_combinations = itertools.product(sweep_config['torch_compile_backend'], sweep_config['torch_compile_mode'])
+    all_base_combinations = itertools.chain(
+        mixed_precision_combinations,
+        quantization_combinations, 
+        neither_combinations
+    )
+   
+    assert len(list(mixed_precision_combinations)) == mixed_precision_base_count, ValueError("Mixed precision base count does not match.")
+    assert len(list(quantization_combinations)) == quantization_base_count, ValueError("Quantization base count does not match.")
+    assert len(list(neither_combinations)) == neither_base_count, ValueError("Neither base count does not match.")
+    assert len(list(all_base_combinations)) == total_base_combinations, ValueError("Total base count does not match.")
     
-    mp_count = len([d for d in sweep_config['mixed_precision_dtype'] if d is not None])
-    q_count = len([d for d in sweep_config['quantization_dtype'] if d is not None])
-    base_count = (mp_count + q_count + 1) * len(sweep_config['quantize_kvcache']) * len(sweep_config['model_execution_backend']) * len(sweep_config['decoding'])
-    total_count = base_count * len(list(torch_compile_combinations))
-    
-    base_combinations = tqdm(base_combinations, desc="Computing the Cartesian Product of Hyperparameter Configurations.", total=total_count)
-    
-    for mixed_precision_dtype, quantization_dtype, quantization_method, quantize_kvcache, model_execution_backend, decoding in base_combinations:
-        
-        base_config = {
-            "mixed_precision_dtype": mixed_precision_dtype,
-            "quantization_dtype": quantization_dtype,
-            "quantization_method": quantization_method,
-            "quantize_kvcache": quantize_kvcache,
-            "model_execution_backend": model_execution_backend,
-            "decoding": decoding
+    with tqdm(total=total_final_combinations, desc="Generating combinations") as pbar:
+        for combo in all_base_combinations:
+            mixed_precision_dtype, quantization_wbits, quantization_method, quantize_kvcache, model_execution_backend, decoding = combo
+            
+            base_config = {
+                'mixed_precision_dtype': mixed_precision_dtype,
+                'quantization_wbits': quantization_wbits,
+                'quantization_method': quantization_method,
+                'quantize_kvcache': quantize_kvcache,
+                'model_execution_backend': model_execution_backend,
+                'decoding': decoding
             }
-
-        for torch_compile_backend, torch_compile_mode in torch_compile_combinations:
-            config = base_config.copy()
-            config['torch_compile_backend'] = torch_compile_backend
-            config['torch_compile_mode'] = torch_compile_mode
-            all_configs.append(config)
-            base_combinations.update(1)
+               
+            for torch_backend in sweep_config['torch_compile_backend']:
+                for torch_compile_mode in sweep_config['torch_compile_model']:
+                    config = base_config.copy()
+                    config['torch_compile_backend'] = torch_backend
+                    config['torch_compile_mode'] = torch_compile_mode
+                    final_combinations.append(config)
+                    pbar.update(1)
+                
+            '''           
             
-    '''
-    mixed_precision_dtype: ["fp16", "bfloat16", "fp8", "bfloat8", "int8", "int4", None]
-    quantization_dtype: ["float16", "float8", "bfloat16", "bfloat8", "int8", "int4", None]
-    quantization_method: ["gptq", "awq", "gguf", "exl12", "bitsandbytes"]
-    quantize_kvcache: ["float16", "bfloat16", "float8", "bfloat8", "int8", "int4", None]
-    model_execution_backend: ["torch.compile", "onnxruntime", "tensorrt", "vllm"]
-    torch_compile_backend: ["inductor", "eager", "aot_eager"]
-    torch_compile_mode: ["default", "reduce-overhead", "max-autotune"]
-    decoding: ["speculative",  "speculative_top_p",  "speculative_top_k", "base_top_p",  "base_top_k"] 
-    '''
-
+            # NOTE | this should be used instead if we end up adding extra model_execution_backends other than torch.compile
+            
+            if model_execution_backend == "torch.compile":
+                for torch_backend in sweep_config['torch_compile_backend']:
+                    for torch_mode in sweep_config['torch_compile_mode']:
+                        config = base_config.copy()
+                        config['torch_compile_backend'] = torch_backend
+                        config['torch_compile_mode'] = torch_mode
+                        final_combinations.append(config)
+                        pbar.update(1)
+            else:
+                config = base_config.copy()
+                config['torch_compile_backend'] = None
+                config['torch_compile_mode'] = None
+                final_combinations.append(config)
+                pbar.update(1)
+            '''
     
-    ''' 
-    for mixed_precision, quantization, model_execution_backend, decoding, quantize_kvcache in base_combinations:
-        mp_dtypes = sweep_config["mixed_precision_dtype"]
-        q_dtypes = sweep_config["quantization_dtype"]
-        q_methods = sweep_config["quantization_method"]
-        torch_backends = sweep_config["torch_compile_backend"]
-        torch_compile_modes = sweep_config["torch_compile_mode"] 
-       
-        for mp_dtype, q_dtype, q_method, torch_backend, torch_compile_mode in itertools.product(mp_dtypes, q_dtypes, q_methods, torch_backends, torch_compile_modes):
-            config = {
-                "mixed_precision": mixed_precision,
-                "quantization": quantization,
-                "model_execution_backend": model_execution_backend,
-                "decoding": decoding,
-                "quantize_kvcache": quantize_kvcache,
-                }
+    return final_combinations
 
-            if config['mixed_precision']:
-                config["mixed_precision_dtype"] = mp_dtype
-                if config['quantization']:
-                    config['quantization'] = False
-            
-            if config['quantization']:
-                config["quantization_dtype"] = q_dtype
-                config["quantization_method"] = q_method
-                
-                if config["mixed_precision"]:
-                    config["mixed_precision"] = False
-                
-            if config['model_execution_backend'] == "torch.compile":
-                config["torch_compile_backend"] = torch_backend
-                config["torch_compile_mode"] = torch_compile_mode
-
-            all_configs.append(config)
-
-    '''
-
-    logger.info(f"Computed and cached {len(all_configs)} configurations.")
-    return all_configs
- 
-def _compile_model(model, backend, mode):
+def compile_model(model, backend, mode):
     model = torch.compile(model, backend = backend, mode = mode)
     return model 
  
-def quantize(
-    model, 
-    quantization_method, 
-    quantization_dtype:Union[str, list[str]], 
-    calibration_data,
-    groupsize = 128,
-    percdamp = 0.1,
-    nsamples = 128,
-    ):
-   
-    '''
-    TODO 
-    - [ ] gptq
-        - [ ] test if it works with model
-        - [ ] cleanup code
-    - [ ] awq
-    - [ ] gguf
-    - [ ] exl12
-    - [ ] bitsandbytes
-    '''
-  
-    if quantization_method == "gptq":
-        return model
-    elif quantization_method == "awq":
-        pass
-    elif quantization_method == "gguf":
-        pass
-    elif quantization_method == "exl12":
-        pass
-    elif quantization_method == "bitsandbytes":
-        pass
-   
-    return
-
 def quantize_kv():
     return
   
 def main(
-    model = None,
-    weights_path:str = None,
+    model_path:str = None,
+    tokenizer_path:str = None,
     sweep_config_path:str = None,
-    model_config_path:str = None,
-    load_model_weights:bool = True,
-    debug_run:bool = False
+    q_model_path_table:dict = None,
     ):
 
     '''
+
+    weights_path: path to the weights file.
+    sweep_config_path: path to the sweep config file.
+    model_config_path: path to the model config file.
+    q_weights_path_table: dictionary with the quantized weights paths.
+
+        {
+            "gptq": "path/to/quantized/weights" or "path/to/hf/model",
+            "awq": "path/to/quantized/weights" or "path/to/hf/model",
+            "gguf": "path/to/quantized/weights" or "path/to/hf/model",
+            "exl12": "path/to/quantized/weights" or "path/to/hf/model",
+            "bitsandbytes": "path/to/quantized/weights" or "path/to/hf/model",
+            "none": "path/to/non_quantized/weights" or "path/to/hf/model"
+        }
+
+    TODO
    
-    TODO - remove the debug run for official run.
+    - [ ] implement decoding methods
+        - [ ] implement speculative decoding impl.
+        - [ ] implement speculative top p decoding impl.
+        - [ ] implement speculative top k decoding impl.
+        - [ ] implement base top p decoding impl.
+        - [ ] implement base top k decoding impl.
+    - [ ] implement quantizing kv cache
+    - [ ] implement mixed precision
     
     '''
 
     sweep_config = load_config(sweep_config_path, id = "sweep") 
-
-    if not debug_run: 
-        model_config = load_config(model_config_path, id = "model")
-    
-    if not debug_run: 
-        logger.info(f"Initializting model and loading weights.")
-        model = Athena(**model_config)
-        model, _ = load_weights_model(model, weights_path = weights_path, load_model_weights = load_model_weights)
-   
+    logger.info(f"Initializting model and loading weights.")
 
     configs = create_combinations(sweep_config)
+  
+    configs = tqdm(configs, desc = "Sweeping Hyperparameters", total = len(configs))
+   
+    for cfg in configs:
+        # cfg is type dict, as 
+        # {'mixed_precision_dtype': 'fp16', 'quantization_wbits': 'int8', 'quantization_method': 'gptq', 'quantize_kvcache': 'float16', \
+        # 'model_execution_backend': 'torch.compile', 'decoding': 'speculative', 'torch_compile_backend': 'inductor', 'torch_compile_mode': 'default'}
+      
+        configs.set_description(f"Sweeping Hyperparameters | Mixed Precision: {cfg['mixed_precision_dtype']} | Quantization: {cfg['quantization_method']} \
+                                | Quantization Wbits: {cfg['quantization_wbits']} | Quantization Kvcache: {cfg['quantize_kvcache']} | \
+                                Model Execution Backend: {cfg['model_execution_backend']} | Decoding: {cfg['decoding']} | Torch Compile Backend: \
+                                {cfg['torch_compile_backend']} | Torch Compile Mode: {cfg['torch_compile_mode']}")
+        
+        quantized_model_path = q_model_path_table[cfg['quantization_method']]
+
+        model, tokenizer = load_model(
+            model_path = quantized_model_path, 
+            model = model, 
+            return_model_weights = False, 
+            load_from_hf = True,
+            return_tokenizer = True,
+            load_tokenizer_config = {'load_tokenzier_path': tokenizer_path}
+            ) 
     
+        if cfg['model_execution_backend'] == "torch.compile":
+            model = torch.compile(model = model, backend = cfg['torch_compile_backend'], mode = cfg['torch_compile_mode'])
+       
+        # TODO - left off here. 
+         
+          
     return
 
 if __name__ == "__main__":

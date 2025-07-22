@@ -50,3 +50,18 @@ python setup.py install
 ```
 
 not needed for other quantization methods.
+
+
+### TODO
+
+##### `quantize.py`
+
+- [ ] Convert weights to hf format
+- [ ] Verify GPTq works
+- [ ] Verify AWQ works
+- [ ] Verify Quanto works
+- [ ] Verify AQLM works
+- [ ] Verify VPTq works
+- [ ] Verify hqq works
+- [ ] Verify bitsandbytes works
+- [ ] Verify spqr works

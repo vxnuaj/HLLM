@@ -2,32 +2,20 @@
 
 TODO
 
-- [X] gptq implementation
-    - [ ] test / run hf quantization
-- [ ] awq implementation
-    - [ ] test / run quantization
-- [ ] gguf implementation
-    - [ ] test / run quantization
-- [ ] exl12 implementation
-    - [ ] test / run quantization
-- [ ] bitsandbytes implementation
-    - [ ] test / run quantization
-
 '''
-
 
 import os
 import sys
 import json
 import logging
 import torch
-import torch.nn as nn
-import pkl
+import argparse
 
-from transformers import PreTrainedTokenizerFast, AutoModelForCausalLM
-from typing import Union
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'package', 'gptq'))
+from transformers import (PreTrainedTokenizerFast, AutoModelForCausalLM, Tokenizer, \
+    AwqConfig, QuantoConfig, VptqConfig, BitsAndBytesConfig, HqqConfig, SpQRConfig)
+from typing import Union, Optional
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'model'))
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'package', 'gptq'))
 from gptq import GPTQ
 from quant import Quantizer
 from model import Athena
@@ -39,33 +27,22 @@ def load_config(config_path):
         config = json.load(f)
     return config
 
-def load_weights_model(model, weights_path, load_model_weights=True):
-    model_weights = torch.load(weights_path, weights_only=True)
-    if load_model_weights:
-        model.load_state_dict(model_weights)
-        return model, model_weights
-    return model, model_weights
-
-def find_layers(module, layers=[torch.nn.Linear], name=''):
-    if type(module) in layers:
-        return {name: module}
-    res = {}
-    for name1, child in module.named_children():
-        res.update(find_layers(
-            child, layers=layers, name=name + '.' + name1 if name != '' else name1
-        ))
-    return res
-
 def load_tokenizer(
-    tokenizer_path, 
+    tokenizer_file, 
     confirm_special_toks = True, 
-    eos_token = None, 
-    bos_token = None, 
-    pad_token = None
+    eos_token = "<|eos|>", 
+    bos_token = "<|bos|>", 
+    pad_token = "<|pad|>"
     ):
-    
-    tokenizer = PreTrainedTokenizerFast(tokenizer_path = tokenizer_path)
+ 
+    '''
    
+    tokenizer_file is a local .json file for the tokenizer. 
+    
+    '''
+  
+    tokenizer = PreTrainedTokenizerFast(tokenizer_file = tokenizer_file)
+    
     if confirm_special_toks:
         if tokenizer.eos_token != eos_token:
             tokenizer.eos_token = eos_token
@@ -77,171 +54,560 @@ def load_tokenizer(
     return tokenizer
  
 def quantize_gptq(
-    model, 
     calibration_data, 
-    quantization_dtype=4, 
+    quantization_bits=4, 
     nsamples=128, 
     percdamp=0.01, 
     groupsize=128,
-    hf_or_manual = 'hf',
-    tokenizer_path = None,
+    tokenizer_file = None,
     hf_model_id = None,
     save_model_to_hf = False,
-    save_model_path:str = None,
+    save_model_hf_path:str = None,
+    save_model_to_local = False,
+    save_model_local_path:str = None,
     model_name:str = None
     ):
 
     assert save_model_path is not None, "Must specify a save model path ( or hf repo )"
-    if save_model_to_hf:
-        assert save_model_path != 'tiny-research/athena', "Must be {MODEL_NAME_OR_ID}_Quantized"
    
-    save_tokenizer_path = save_model_path 
-    
     logger.info('Initializing GPTQ Quantization.')
        
-    if hf_or_manual == 'hf':
-        # see: https://huggingface.co/docs/transformers/en/quantization/gptq
-        
-        if isinstance(calibration_data, list, torch.tensor, torch.Tensor):
-            calibration_data = tokenizer.batch_decode(calibration_data)
-            if isinstance(calibration_data, list):
-                calibration_data = torch.tensor(calibration_data)
+    if isinstance(calibration_data, list, torch.tensor, torch.Tensor):
+        calibration_data = tokenizer.batch_decode(calibration_data)
+        if isinstance(calibration_data, list):
+            calibration_data = torch.tensor(calibration_data)
 
-        tokenizer = load_tokenizer(tokenizer_path, eos_token = "<|eos|>", bos_token = "<|bos|>", pad_token = "<|pad|>")
-        
-        gptq_config = GPTQConfig(
-           bits = quantization_dtype,
-           dataset = calibration_data,
-           tokenizer=tokenizer,
-           group_size = groupsize,
-           batch_size = nsamples,
-           damp_percent = percdamp,
+    tokenizer = load_tokenizer(tokenizer_file, eos_token = "<|eos|>", bos_token = "<|bos|>", pad_token = "<|pad|>")
+    
+    gptq_config = GPTQConfig(
+        bits = quantization_bits,
+        dataset = calibration_data,
+        tokenizer=tokenizer,
+        group_size = groupsize,
+        batch_size = nsamples,
+        damp_percent = percdamp,
+    )
+    
+    quantized_model = AutoModelForCausalLM.from_pretrained(
+        hf_model_id,
+        device_map = 'auto',
+        gptq_config=gptq_config,
+    ) 
+            
+    if save_model_to_hf and not save_model_to_local:
+        repo_id = f"{save_model_hf_path}/{model_name}-gptq" if "/" not in save_model_hf_path else save_model_hf_path
+        quantized_model.push_to_hub(
+            repo_id=repo_id,
+            commit_message=f"Upload quantized {model_name} model",
+            private=False
         )
+        tokenizer.push_to_hub(
+            repo_id=repo_id,
+            commit_message=f"Upload tokenizer for {model_name}",
+            private=False
+        )
+    elif save_model_to_hf and save_model_to_local:
+        repo_id = f"{save_model_hf_path}/{model_name}-gptq" if "/" not in save_model_hf_path else save_model_hf_path
+        quantized_model.push_to_hub(
+            repo_id=repo_id,
+            commit_message=f"Upload quantized {model_name} model",
+            private=False
+        )
+        tokenizer.push_to_hub(
+            repo_id=repo_id,
+            commit_message=f"Upload tokenizer for {model_name}",
+            private=False
+        )   
+        torch.save(quantized_model.state_dict(), os.path.join(save_model_local_path, model_name))
+    elif save_model_to_local and not save_model_to_hf:
+        torch.save(quantized_model.state_dict(), os.path.join(save_model_local_path, model_name))
         
-        quantized_model = AutoModelForCausalLM.from_pretrained(
+def quantize_awq(
+    hf_model_id:str,
+    tokenizer:str,
+    model_save_path: str,
+    quantization_bits:int = 4,
+    group_size:int = 128,
+    do_fuse:bool = True,
+    fuse_max_seq_len:int = 512,
+    save_model_to_hf:bool = False,
+    save_model_to_local:bool = False,
+    save_model_hf_path:str = None,
+    save_model_local_path:str = None,
+    model_name:str = None
+    ):
+
+    assert model_save_path is not None, "Must specify a save model path ( or hf repo )"
+    
+    logger.info(f"Initializing AWQ Quantization")
+
+    awq_config = AwqConfig(
+        bits = quantization_bits,
+        group_size = group_size,
+        version = AWQLinerVersion.GEMv,
+        do_fuse = do_fuse,
+        fuse_max_seq_len = fuse_max_seq_len
+    )
+   
+    quantized_model = AutoModelForCausalLM.from_pretrained(
+        model = hf_model_id,
+        device_map = 'auto', 
+        quantization_config = awq_config 
+    )
+
+    if save_model_to_hf and not save_model_to_local:
+        repo_id = f"{save_model_hf_path}/{model_name}-awq" if "/" not in save_model_hf_path else save_model_hf_path
+        quantized_model.push_to_hub(
+            repo_id=repo_id,
+            commit_message=f"Upload quantized {model_name} model",
+            private=False
+        )
+        tokenizer = load_tokenizer(tokenizer_file, eos_token = "<|eos|>", bos_token = "<|bos|>", pad_token = "<|pad|>")
+        tokenizer.push_to_hub(
+            repo_id=repo_id,
+            commit_message=f"Upload tokenizer for {model_name}",
+            private=False
+        )
+    elif save_model_to_hf and save_model_to_local:
+        repo_id = f"{save_model_hf_path}/{model_name}-awq" if "/" not in save_model_hf_path else save_model_hf_path
+        quantized_model.push_to_hub(
+            repo_id=repo_id,
+            commit_message=f"Upload quantized {model_name} model",
+            private=False
+        )
+        tokenizer = load_tokenizer(tokenizer_file, eos_token = "<|eos|>", bos_token = "<|bos|>", pad_token = "<|pad|>")
+        tokenizer.push_to_hub(
+            repo_id=repo_id,
+            commit_message=f"Upload tokenizer for {model_name}",
+            private=False
+        )   
+        torch.save(quantized_model.state_dict(), os.path.join(save_model_local_path, model_name))
+    elif save_model_to_local and not save_model_to_hf:
+        torch.save(quantized_model.state_dict(), os.path.join(save_model_local_path, model_name))
+
+    return quantized_model
+
+def quantize_quanto(
+    hf_model_id:str, 
+    weights_target_dtype:str, 
+    activations_target_dtype:str,
+    save_model_to_hf:bool = False,
+    save_model_to_local:bool = False,
+    save_model_hf_path:str = None,
+    save_model_local_path:str = None,
+    model_name:str = None
+    ):
+    
+    quanto_config = QuantoConfig(
+        weights = weights_target_dtype,
+        activations = activations_target_dtype
+    )
+
+    quantized_model = AutoModelForCausalLM.from_pretrained(
+        model = hf_model_id,
+        device_map = 'auto',
+        quantization_config = quanto_config
+    )
+
+    if save_model_to_hf and not save_model_to_local:
+        repo_id = f"{save_model_hf_path}/{model_name}-quanto" if "/" not in save_model_hf_path else save_model_hf_path
+        quantized_model.push_to_hub(
+            repo_id=repo_id,
+            commit_message=f"Upload quantized {model_name} model",
+            private=False
+        )
+        tokenizer = load_tokenizer(tokenizer_file, eos_token = "<|eos|>", bos_token = "<|bos|>", pad_token = "<|pad|>")
+        tokenizer.push_to_hub(
+            repo_id=repo_id,
+            commit_message=f"Upload tokenizer for {model_name}",
+            private=False
+        )
+    elif save_model_to_hf and save_model_to_local:
+        repo_id = f"{save_model_hf_path}/{model_name}-quanto" if "/" not in save_model_hf_path else save_model_hf_path
+        quantized_model.push_to_hub(
+            repo_id=repo_id,
+            commit_message=f"Upload quantized {model_name} model",
+            private=False
+        )
+        tokenizer = load_tokenizer(tokenizer_file, eos_token = "<|eos|>", bos_token = "<|bos|>", pad_token = "<|pad|>")
+        tokenizer.push_to_hub(
+            repo_id=repo_id,
+            commit_message=f"Upload tokenizer for {model_name}",
+            private=False
+        )   
+        torch.save(quantized_model.state_dict(), os.path.join(save_model_local_path, model_name))
+    elif save_model_to_local and not save_model_to_hf:
+        torch.save(quantized_model.state_dict(), os.path.join(save_model_local_path, model_name))
+
+    return quantized_model
+
+def quantize_aqlm(
+    hf_model_id:str,
+    in_group_size,
+    out_group_size,
+    num_codebooks,
+    nbits_per_codebook,
+    save_model_to_hf:bool,
+    save_model_to_local:bool,
+    save_model_hf_path:str,
+    save_model_local_path:str,
+    model_name:str
+    ):
+
+    aqlm_config = AqlmConfig(
+        in_group_size = in_group_size,
+        out_group_size = out_group_size,
+        num_codebooks = num_codebooks,
+        num_codebooks = num_codebooks,
+        nbits_per_codebook = nbits_per_codebook
+    )
+
+    quantized_model = AutoModelForCausalLM.from_pretrained(
             hf_model_id,
-            device_map = 'auto',
-            gptq_config=gptq_config,
-        ) 
-              
-        if save_model_to_hf:
-            quantized_model.push_to_hub(os.path.join(save_model_path, model_name))   
-            tokenizer.push_to_hub(os.path.join(save_tokenizer_path, model_name)) 
-        else:
-            torch.save(quantized_model.state_dict(), os.path.join(save_model_path, model_name))
-        
-    elif hf_or_manual == 'manual': 
+            quantized_config = aqlm_config
+    )
 
-        logger.info('Manual quantization not fully implemented yet, use at your own risk.')
-        
-        model.eval()
-        wbits = quantization_dtype if isinstance(quantization_dtype, int) else 4
-        
-        model.embeddings = model.embeddings.cuda()
-        if hasattr(model, 'pe'):
-            model.pe = model.pe.cuda()
-        model.block[0] = model.block[0].cuda()
-                
-        dtype = next(iter(model.parameters())).dtype
-        inps = torch.zeros((nsamples, model.context_len, model.d_model), dtype=dtype, device='cuda')
-        cache = {'i': 0}
-        
-        class Catcher(nn.Module):
-            def __init__(self, module):
-                super().__init__()
-                self.module = module
-            def forward(self, inp, **kwargs):
-                inps[cache['i']] = inp
-                cache['i'] += 1
-                raise ValueError
-        
-        model.block[0] = Catcher(model.block[0])
- 
-        # if calibration_data is None:
-        #    logger.warning("No calibration data provided, using random token sequences")
-        #    calibration_data = [torch.randint(0, min(model.vocab_size, 32000), (1, model.context_len)) for _ in range(nsamples)]
-        
-        for i, batch in enumerate(calibration_data):
-            if i >= nsamples:
-                break
-            try:
-                if isinstance(batch, list):
-                    batch = batch[0]
-                x = model.embeddings(batch.cuda())
-                if hasattr(model, 'pe'):
-                    x = model.pe(x)
-                model.block[0](x)
-            except ValueError:
-                pass
-        
-        model.block[0] = model.block[0].module
-        
-        model.block[0] = model.block[0].cpu()
-        model.embeddings = model.embeddings.cpu()
-        if hasattr(model, 'pe'):
-            model.pe = model.pe.cpu()
-        torch.cuda.empty_cache()
-        
-        logger.info('Calibration data collected. Starting quantization...')
-        
-        outs = torch.zeros_like(inps)
-        quantizers = {}
-        
-        for i, layer in enumerate(model.block):
-            layer = layer.cuda()
-            subset = find_layers(layer)
-            
-            gptq = {}
-            for name in subset:
-                gptq[name] = GPTQ(subset[name])
-                gptq[name].quantizer = Quantizer()
-                gptq[name].quantizer.configure(wbits, perchannel=True, sym=False, mse=True)
-            
-            def add_batch(name):
-                def tmp(_, inp, out):
-                    gptq[name].add_batch(inp[0].data, out.data)
-                return tmp
-            
-            handles = []
-            for name in subset:
-                handles.append(subset[name].register_forward_hook(add_batch(name)))
-            
-            for j in range(nsamples):
-                if j < len(inps):
-                    outs[j] = layer(inps[j].unsqueeze(0), _inference=False)
-            
-            for h in handles:
-                h.remove()
-            
-            for name in subset:
-                logger.info(f'Quantizing block {i}, layer {name}')
-                gptq[name].fasterquant(percdamp=percdamp, groupsize=groupsize)
-                quantizers[f'block.{i}.{name}'] = gptq[name].quantizer
-                gptq[name].free()
-            
-            layer = layer.cpu()
-            torch.cuda.empty_cache()
-            inps, outs = outs, inps
-        
-        logger.info('GPTQ quantization complete')
-        return model, quantizers
-
-def quantize_awq(model):
     
-    return model
+    if save_model_to_hf and not save_model_to_local:
+        repo_id = f"{save_model_hf_path}/{model_name}-aqlm" if "/" not in save_model_hf_path else save_model_hf_path
+        quantized_model.push_to_hub(
+            repo_id=repo_id,
+            commit_message=f"Upload quantized {model_name} model",
+            private=False
+        )
+        tokenizer = load_tokenizer(tokenizer_file, eos_token = "<|eos|>", bos_token = "<|bos|>", pad_token = "<|pad|>")
+        tokenizer.push_to_hub(
+            repo_id=repo_id,
+            commit_message=f"Upload tokenizer for {model_name}",
+            private=False
+        )
+    elif save_model_to_hf and save_model_to_local:
+        repo_id = f"{save_model_hf_path}/{model_name}-aqlm" if "/" not in save_model_hf_path else save_model_hf_path
+        quantized_model.push_to_hub(
+            repo_id=repo_id,
+            commit_message=f"Upload quantized {model_name} model",
+            private=False
+        )
+        tokenizer = load_tokenizer(tokenizer_file, eos_token = "<|eos|>", bos_token = "<|bos|>", pad_token = "<|pad|>")
+        tokenizer.push_to_hub(
+            repo_id=repo_id,
+            commit_message=f"Upload tokenizer for {model_name}",
+            private=False
+        )   
+        torch.save(quantized_model.state_dict(), os.path.join(save_model_local_path, model_name))
+    elif save_model_to_local and not save_model_to_hf:
+        torch.save(quantized_model.state_dict(), os.path.join(save_model_local_path, model_name))
 
-def quantize(model, quantization_method, quant_save_path:str, model_id:str):
+    return quantized_model
+
+def quantize_vptq(
+    hf_model_id:str,
+    config_for_layers, 
+    shared_layer_config,
+    save_model_to_hf:bool,
+    save_model_to_local:bool,
+    save_model_hf_path:str,
+    save_model_local_path:str,
+    model_name:str
+    ):
+
+    vptq_config = VptqConfig(
+        config_for_layers = config_for_layers,
+        shared_layer_config = shared_layer_config     
+    )
+
+    quantized_model = AutoModelForCausalLM.from_pretrained(
+        hf_model_id,
+        quantized_config = vptq_config
+    )
+
+
+    if save_model_to_hf and not save_model_to_local:
+        repo_id = f"{save_model_hf_path}/{model_name}-vptq" if "/" not in save_model_hf_path else save_model_hf_path
+        quantized_model.push_to_hub(
+            repo_id=repo_id,
+            commit_message=f"Upload quantized {model_name} model",
+            private=False
+        )
+        tokenizer = load_tokenizer(tokenizer_file, eos_token = "<|eos|>", bos_token = "<|bos|>", pad_token = "<|pad|>")
+        tokenizer.push_to_hub(
+            repo_id=repo_id,
+            commit_message=f"Upload tokenizer for {model_name}",
+            private=False
+        )
+    elif save_model_to_hf and save_model_to_local:
+        repo_id = f"{save_model_hf_path}/{model_name}-vptq" if "/" not in save_model_hf_path else save_model_hf_path
+        quantized_model.push_to_hub(
+            repo_id=repo_id,
+            commit_message=f"Upload quantized {model_name} model",
+            private=False
+        )
+        tokenizer = load_tokenizer(tokenizer_file, eos_token = "<|eos|>", bos_token = "<|bos|>", pad_token = "<|pad|>")
+        tokenizer.push_to_hub(
+            repo_id=repo_id,
+            commit_message=f"Upload tokenizer for {model_name}",
+            private=False
+        )   
+        torch.save(quantized_model.state_dict(), os.path.join(save_model_local_path, model_name))
+    elif save_model_to_local and not save_model_to_hf:
+        torch.save(quantized_model.state_dict(), os.path.join(save_model_local_path, model_name))
+
+    return quantized_model
+
+def quantize_hqq(
+    hf_model_id:str,
+    nbits:int,
+    group_size:int,
+    save_model_to_hf:bool,
+    save_model_to_local: bool,
+    save_model_hf_path:str,
+    save_model_local_path:str,
+    model_name:str,
+    skip_modules:List[str] = []
+    ):
+
+
+    hqq_config = HqqConfig(
+        nbits = nbits,
+        group_size = group_size,
+        skip_modules = skip_modules
+    )
+
+    quantized_model = AutoModelForCausalLM.from_pretrained(
+        hf_model_id,
+        quantized_config = hqq_config
+    )
+
+    if save_model_to_hf and not save_model_to_local:
+        repo_id = f"{save_model_hf_path}/{model_name}-hqq" if "/" not in save_model_hf_path else save_model_hf_path
+        quantized_model.push_to_hub(
+            repo_id=repo_id,
+            commit_message=f"Upload quantized {model_name} model",
+            private=False
+        )
+        tokenizer = load_tokenizer(tokenizer_file, eos_token = "<|eos|>", bos_token = "<|bos|>", pad_token = "<|pad|>")
+        tokenizer.push_to_hub(
+            repo_id=repo_id,
+            commit_message=f"Upload tokenizer for {model_name}",
+            private=False
+        )
+    elif save_model_to_hf and save_model_to_local:
+        repo_id = f"{save_model_hf_path}/{model_name}-hqq" if "/" not in save_model_hf_path else save_model_hf_path
+        quantized_model.push_to_hub(
+            repo_id=repo_id,
+            commit_message=f"Upload quantized {model_name} model",
+            private=False
+        )
+        tokenizer = load_tokenizer(tokenizer_file, eos_token = "<|eos|>", bos_token = "<|bos|>", pad_token = "<|pad|>")
+        tokenizer.push_to_hub(
+            repo_id=repo_id,
+            commit_message=f"Upload tokenizer for {model_name}",
+            private=False
+        )   
+        torch.save(quantized_model.state_dict(), os.path.join(save_model_local_path, model_name))
+    elif save_model_to_local and not save_model_to_hf:
+        torch.save(quantized_model.state_dict(), os.path.join(save_model_local_path, model_name))
+    return quantized_model
+
+def quantize_bitsandbytes(
+    hf_model_id:str,
+    load_in_8bit:bool,
+    load_in_4bit:bool,
+    load_in_2bit:bool,
+    load_in_1bit:bool,
+    save_model_to_hf:bool,
+    save_model_to_local:bool,
+    save_model_path:str,
+    model_name:str,
+    ):
+
+    _val_list = [load_in_8bit, load_in_4bit, load_in_2bit, load_in_1bit]
+
+    assert _val_list.count(True) == 1, "Must specify exactly one of load_in_8bit, load_in_4bit, load_in_2bit, or load_in_1bit"
+
+    bitsandbytes_config = BitsAndBytesConfig(
+        load_in_8bit = load_in_8bit,
+        load_in_4bit = load_in_4bit,
+        load_in_2bit = load_in_2bit,
+        load_in_1bit = load_in_1bit,
+    )
     
-    '''
-    TODO - verify before running quantization 
-    ''' 
+    quantized_model = AutoModelForCausalLM.from_pretrained(
+        hf_model_id,
+        quantized_config = bitsandbytes_config
+    )
+
+    if save_model_to_hf and not save_model_to_local:
+        repo_id = f"{save_model_hf_path}/{model_name}-bitsandbytes" if "/" not in save_model_hf_path else save_model_hf_path
+        logger.info(f"Saving quantized model to Hugging Face Hub: {repo_id}")
+        quantized_model.push_to_hub(
+            repo_id=repo_id,
+            commit_message=f"Upload quantized {model_name} model",
+            private=False
+        )
+        tokenizer = load_tokenizer(tokenizer_file, eos_token = "<|eos|>", bos_token = "<|bos|>", pad_token = "<|pad|>")
+        tokenizer.push_to_hub(
+            repo_id=repo_id,
+            commit_message=f"Upload tokenizer for {model_name}",
+            private=False
+        )
+    elif save_model_to_hf and save_model_to_local:
+        repo_id = f"{save_model_hf_path}/{model_name}-bitsandbytes" if "/" not in save_model_hf_path else save_model_hf_path
+        logger.info(f"Saving quantized model to Hugging Face Hub and local: {repo_id}")
+        quantized_model.push_to_hub(
+            repo_id=repo_id,
+            commit_message=f"Upload quantized {model_name} model",
+            private=False
+        )
+        tokenizer = load_tokenizer(tokenizer_file, eos_token = "<|eos|>", bos_token = "<|bos|>", pad_token = "<|pad|>")
+        tokenizer.push_to_hub(
+            repo_id=repo_id,
+            commit_message=f"Upload tokenizer for {model_name}",
+            private=False
+        )   
+        torch.save(quantized_model.state_dict(), os.path.join(save_model_local_path, model_name))
+    elif save_model_to_local and not save_model_to_hf:
+        logger.info(f"Saving quantized model to local: {save_model_local_path}/{model_name}")
+        torch.save(quantized_model.state_dict(), os.path.join(save_model_local_path, model_name))
+    return quantized_model
+        
+def quantize_spqr(
+    hf_model_id:str,
+    bits:int,
+    beta1:int,
+    beta2:int,
+    shapes:List[int],
+    modules_not_to_convert:List[str],
+    save_model_to_hf:bool,
+    save_model_hf_path:str,
+    save_model_to_local:bool,
+    save_model_local_path:str,
+    model_name:str
+    ):
+
+    spqr_config = SpQRConfig(
+        bits = bits,
+        beta1 = beta1,
+        beta2 = beta2,
+        shapes = shapes,
+        modules_not_to_convert = modules_not_to_convert,
+    )
+
+    quantized_model = AutoModelForCausalLM.from_pretrained(
+        hf_model_id,
+        quantized_config = spqr_config
+    )
+
+    if save_model_to_hf and not save_model_to_local:
+        repo_id = f"{save_model_hf_path}/{model_name}-spqr" if "/" not in save_model_hf_path else save_model_hf_path
+        logger.info(f"Saving quantized model to Hugging Face Hub: {repo_id}")
+        quantized_model.push_to_hub(
+            repo_id=repo_id,
+            commit_message=f"Upload quantized {model_name} model",
+            private=False
+        )
+        tokenizer = load_tokenizer(tokenizer_file, eos_token = "<|eos|>", bos_token = "<|bos|>", pad_token = "<|pad|>")
+        tokenizer.push_to_hub(
+            repo_id=repo_id,
+            commit_message=f"Upload tokenizer for {model_name}",
+            private=False
+        )
+    elif save_model_to_hf and save_model_to_local:
+        repo_id = f"{save_model_hf_path}/{model_name}-spqr" if "/" not in save_model_hf_path else save_model_hf_path
+        logger.info(f"Saving quantized model to Hugging Face Hub and local: {repo_id}")
+        quantized_model.push_to_hub(
+            repo_id=repo_id,
+            commit_message=f"Upload quantized {model_name} model",
+            private=False
+        )
+        tokenizer = load_tokenizer(tokenizer_file, eos_token = "<|eos|>", bos_token = "<|bos|>", pad_token = "<|pad|>")
+        tokenizer.push_to_hub(
+            repo_id=repo_id,
+            commit_message=f"Upload tokenizer for {model_name}",
+            private=False
+        )   
+        torch.save(quantized_model.state_dict(), os.path.join(save_model_local_path, model_name))
+    elif save_model_to_local and not save_model_to_hf:
+        logger.info(f"Saving quantized model to local: {save_model_local_path}/{model_name}")
+        torch.save(quantized_model.state_dict(), os.path.join(save_model_local_path, model_name))
+    return quantized_model
+
+def quantize(
+    model,
+    quantization_method,
+    quant_save_path:str,
+    model_id:str,
+    gptq_config = None,
+    awq_config = None,
+    bitsandbytes_config = None,
+    spqr_config = None,
+    quanto_config = None,
+    hqq_config = None,
+    aqlm_config = None,
+    vptq_config = None,
+    ):
     
     quant_save_path = os.path.join(quant_save_path, model_id)
+    
     if quantization_method == 'gptq':
-        model, quantizers = quantize_gptq(model)
+        model = quantize_gptq(**gptq_config)
         torch.save({
             'model': model.state_dict(),
-            'quantizers': quantizers,
+            'model_id': model_id
+            }, quant_save_path) 
+    elif quantization_method == 'awq':
+        model = quantize_awq(**awq_config)
+        torch.save({
+            'model': model.state_dict(),
+            'model_id': model_id
+            }, quant_save_path) 
+    elif quantization_method == 'bitsandbytes':
+        model = quantize_bitsandbytes(**bitsandbytes_config)
+        torch.save({
+            'model': model.state_dict(),
+            'model_id': model_id
+            }, quant_save_path) 
+    elif quantization_method == 'spqr':
+        model = quantize_spqr(**spqr_config)
+        torch.save({
+            'model': model.state_dict(),
+            'model_id': model_id
+            }, quant_save_path) 
+    elif quantization_method == 'quanto':
+        model = quantize_quanto(**quanto_config)
+        torch.save({
+            'model': model.state_dict(),
+            'model_id': model_id
+            }, quant_save_path) 
+    elif quantization_method == 'hqq':
+        model = quantize_hqq(**hqq_config)
+        torch.save({
+            'model': model.state_dict(),
+            'model_id': model_id
+            }, quant_save_path) 
+    elif quantization_method == 'aqlm':
+        model = quantize_aqlm(**aqlm_config)
+        torch.save({
+            'model': model.state_dict(),
+            'model_id': model_id
+            }, quant_save_path) 
+    elif quantization_method == 'vptq':
+        model = quantize_vptq(**vptq_config)
+        torch.save({
+            'model': model.state_dict(),
             'model_id': model_id
             }, quant_save_path) 
     return
+
+if __name__ == "__main__":
+  
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--quantization_method", type=str, required=True)
+    parser.add_argument("--quant_save_path", type=str, required=True, default = "inf_prof/quantized_models/")
+    parser.add_argument("--model_id", type=str, required=True, default = "athena")
+    args = parser.parse_args()
+    
+    model_config = load_config("main/configs/model_config.json")
+    model = Athena(**model_config)
+    model, _ = load_weights_model(model, weights_path = "main/weights/athena.pt")
+    quantized_model = quantize(model, quantization_method = args.quantization_method, quant_save_path = args.quant_save_path, model_id = args.model_id)
