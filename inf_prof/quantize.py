@@ -2,6 +2,9 @@
 
 TODO
 
+- [ ] When we quantize, we should probably do a sweep over all set of quantized models to get the settings ( per quantization method ) with the best accuracy / inference speed.
+    - wait but in that case we wouldn't need to run the quantization sweep over sweep_utils anymore... actually we would because we have different decoding methods...
+    - so we should run the sweep and do best of n accuracy with ewach quantization method to extract best speed + accuracy
 '''
 
 import os
