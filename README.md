@@ -1,4 +1,4 @@
-# HLLM: High-Performance Large Language Model Training and Optimization Framework
+# Hardware-Aware Large Language Model Pre-Training
 
 HLLM is a comprehensive framework designed for efficient training, profiling, and quantization of Large Language Models (LLMs). It supports distributed training, various quantization techniques, and performance profiling.
 
