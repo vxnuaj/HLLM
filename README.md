@@ -21,7 +21,7 @@ HLLM is a comprehensive framework designed for efficient training, profiling, an
     ```bash
     pip install -r requirements.txt
     ```
-    *Note: For AWQ quantization, refer to `inf_prof/README.md` for additional setup steps.*
+    *Note: All quantization methods are now handled via Hugging Face `transformers` library. No special setup is required beyond `pip install -r requirements.txt`.*
 
 ## Usage
 
@@ -46,7 +46,7 @@ To customize your training runs, modify these JSON files directly. The `main/tra
 
 ### Inference & Quantization
 
-The `inf_prof/` directory contains scripts and configurations for inference and quantization. Refer to `inf_prof/README.md` for detailed instructions on running inference sweeps and applying different quantization methods.
+For detailed instructions on running inference sweeps and applying different quantization methods, please refer to the dedicated documentation in [`inf_prof/README.md`](inf_prof/README.md).
 
 ### Configuration & Profiling
 
