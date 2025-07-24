@@ -7,6 +7,12 @@ import numpy
 from torch.utils.data import Dataset, DataLoader, DistributedSampler, SequentialSampler
 
 class TinyStoriesDataset(Dataset):
+    """Dataset for TinyStories, providing input and target sequences.
+
+    This dataset loads preprocessed input (X) and target (y) tensors and provides
+    them as sequences of a specified context length. It is designed to work with
+    PyTorch's DataLoader.
+    """
     def __init__(self, X, y, context_length=512):
         """
         Initialize the dataset with in-memory tensors.
@@ -40,19 +46,18 @@ class TinyStoriesDataset(Dataset):
         return self.X[idx], self.y[idx]
 
 def get_data(path, context_length=512):
-    """
-    Load all data from the specified directory into memory as tensors.
+    """Load all data from the specified directory into memory as tensors.
 
     Args:
-        path: Directory containing 'X' and 'y' subdirectories with data files
-        context_length: Expected length of each sequence
+        path (str): Directory containing 'X' and 'y' subdirectories with data files.
+        context_length (int, optional): Expected length of each sequence. Defaults to 512.
 
     Returns:
-        Tuple of (X, y), where X and y are concatenated tensors from all files
+        Tuple[torch.Tensor, torch.Tensor]: Tuple of (X, y), where X and y are concatenated tensors from all files.
 
     Raises:
-        OSError: If no data files are found in the directories
-        ValueError: If the total number of samples in X and y do not match or shapes are incorrect
+        OSError: If no data files are found in the directories.
+        ValueError: If the total number of samples in X and y do not match or shapes are incorrect.
     """
     X_dir = os.path.join(path, 'X')
     y_dir = os.path.join(path, 'y')
@@ -113,22 +118,25 @@ def get_dataloader(
     *args,
     **kwargs
     ):
-    
-    """
-    Create a DataLoader for the dataset, with support for distributed training.
+    """Create a DataLoader for the dataset, with support for distributed training.
 
     Args:
-        X: Tensor containing the input data
-        y: Tensor containing the corresponding labels
-        batch_size: Number of samples per batch
-        num_workers: Number of subprocesses for data loading
-        shuffle: Whether to shuffle the data (handled by sampler in distributed mode)
-        pin_memory: Whether to pin memory for faster GPU transfer
-        parallelism_type: 'fsdp', 'ddp', 'dp', or None (determines sampler type)
-        rank: Process rank (required for FSDP/DDP)
+        X (torch.Tensor): Tensor containing the input data.
+        y (torch.Tensor): Tensor containing the corresponding labels.
+        batch_size (int): Number of samples per batch.
+        num_workers (int): Number of subprocesses for data loading.
+        shuffle (bool, optional): Whether to shuffle the data (handled by sampler in distributed mode). Defaults to False.
+        pin_memory (bool, optional): Whether to pin memory for faster GPU transfer. Defaults to False.
+        parallelism_type (str, optional): 'fsdp', 'ddp', 'dp', or None (determines sampler type). Defaults to None.
+        rank (int, optional): Process rank (required for FSDP/DDP). Defaults to None.
+        *args: Variable length argument list.
+        **kwargs: Arbitrary keyword arguments.
 
     Returns:
-        DataLoader configured for the specified parallelism type
+        torch.utils.data.DataLoader: DataLoader configured for the specified parallelism type.
+
+    Raises:
+        ValueError: If `rank` is not provided for DDP/FSDP parallelism types.
     """
     
     dataset = TinyStoriesDataset(X, y)

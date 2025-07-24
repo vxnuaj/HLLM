@@ -53,6 +53,34 @@ from blocks import TransformerBlock
 from dotenv import load_dotenv
 
 class Trainer:
+    """Manages the end-to-end training process for a Large Language Model.
+
+    This class orchestrates model initialization, distributed training setup, data loading,
+    optimization, learning rate scheduling, checkpointing, and logging (including Weights & Biases
+    and Hugging Face integration). It supports mixed precision training and various parallelization
+    strategies.
+
+    Attributes:
+        model_config (ModelConfig): Configuration for the model architecture.
+        criterion_config (CriterionConfig): Configuration for the loss function.
+        optimizer_config (OptimizerConfig): Configuration for the optimizer.
+        scheduler_config (SchedulerConfig): Configuration for the learning rate scheduler.
+        dataloader_config (DataloaderConfig): Configuration for data loaders.
+        wandb_config (WandbConfig): Configuration for Weights & Biases logging.
+        train_config (TrainingConfig): General training configuration.
+        logger (logging.Logger): Logger instance for logging messages.
+        mixed_precision_dtype (torch.dtype): Data type for mixed precision operations.
+        scaler (torch.cuda.amp.GradScaler): Gradient scaler for mixed precision training.
+        device (torch.device): The device (CPU or CUDA) the model is running on.
+        model (torch.nn.Module): The initialized and potentially wrapped model.
+        criterion (torch.nn.Module): The loss function.
+        optimizer (torch.optim.Optimizer): The optimizer.
+        scheduler (torch.optim.lr_scheduler._LRScheduler): The learning rate scheduler.
+        run_id (str): Unique identifier for the current training run.
+        run_start_date_time (str): Timestamp when the run started.
+        hf_token (str): Hugging Face API token.
+        wandb_token (str): Weights & Biases API key.
+    """
     def __init__(
         self,
         model_config:dict,
@@ -68,6 +96,22 @@ class Trainer:
         run_id:int = None,
         rm_logs_for_run_id:bool = False,
         ):
+        """Initializes the Trainer with various configuration settings.
+
+        Args:
+            model_config (dict): Dictionary containing model configuration parameters.
+            criterion_config (dict): Dictionary containing criterion configuration parameters.
+            dataloader_config (dict): Dictionary containing dataloader configuration parameters.
+            optimizer_config (dict): Dictionary containing optimizer configuration parameters.
+            scheduler_config (dict): Dictionary containing scheduler configuration parameters.
+            wandb_config (dict): Dictionary containing Weights & Biases configuration parameters.
+            train_config (dict): Dictionary containing general training configuration parameters.
+            debug_nccl (bool, optional): If True, enables NCCL debugging. Defaults to False.
+            debug_level (str, optional): Debug level for NCCL (e.g., 'INFO', 'WARN'). Defaults to 'INFO'.
+            debug_subsys (bool, optional): If True, enables NCCL subsystem debugging. Defaults to False.
+            run_id (int, optional): An optional run ID. If None, a new one will be generated. Defaults to None.
+            rm_logs_for_run_id (bool, optional): If True, removes existing logs for the given run ID. Defaults to False.
+        """
        
         self.model_config = ModelConfig(**model_config)
         self.criterion_config = CriterionConfig(**criterion_config)
@@ -90,7 +134,7 @@ class Trainer:
        
         self.logger = logging.getLogger(__name__)
         self.rm_logs_for_run_id = rm_logs_for_run_id
-        self.run_start_date_time = self.setup_logger(log_level=self.log_level, \
+        self.run_start_date_time = self.setup_logger(log_level=self.log_level, 
                                                      log_root_path=self.log_root_path, return_date_time = True)
 
         assert torch.cuda.is_available(), ValueError("No CUDA device found")
@@ -177,10 +221,8 @@ class Trainer:
         self.scheduler = self.get_scheduler(self.optimizer, **scheduler_config_dict)
     
         if self.load_checkpoint:
-            assert self.load_checkpoint_path is not None, ValueError("load_checkpoint_path \
-                                        must be specified if load_checkpoint is True")
-            assert isinstance(self.load_checkpoint_path, str), ValueError("load_checkpoint_path \
-                                        must be a string") 
+            assert self.load_checkpoint_path is not None, ValueError("load_checkpoint_path \n                                        must be specified if load_checkpoint is True")
+            assert isinstance(self.load_checkpoint_path, str), ValueError("load_checkpoint_path \n                                        must be a string") 
             
             self._chk_cont_epoch, self._chk_cont_global_step, self._chk_cont_local_steps = \
                 self._load_checkpoint(self.load_checkpoint_path) 
@@ -203,7 +245,7 @@ class Trainer:
        
         os.makedirs(os.path.join(self.save_checkpoint_path, f"RUN_{self.run_id}"), exist_ok = True) 
            
-        with open(os.path.join(self.save_checkpoint_path, f"RUN_{self.run_id}", \
+        with open(os.path.join(self.save_checkpoint_path, f"RUN_{self.run_id}", 
                   f"RUN_{self.run_id}_DATETIME_{self.run_start_date_time}_CONFIG.json"), 'w') as f:
             
             run_config_dict = {} 
@@ -221,6 +263,12 @@ class Trainer:
         self.train_data_root_path = self.train_dataloader_config['train_data_root_path']
 
     def train(self):
+        """Executes the main training loop.
+
+        This method handles epoch iteration, batch processing, forward and backward passes,
+        optimizer steps, learning rate scheduling, gradient clipping, and logging.
+        It also manages checkpoint saving and validation steps.
+        """
         rank = dist.get_rank()
         is_main_rank = (rank == 0)
        
@@ -505,15 +553,27 @@ class Trainer:
             raise
 
     def cleanup(self):
+        """Cleans up resources, including closing the TeeHandler and unsetting NCCL logging environment variables.
+        """
         if hasattr(self, 'tee_handler') and self.tee_handler is not None:
             self.tee_handler.close()
         self._setup_nccl_logging(_unset=True)
 
     def _clip_grad_norm(self):
+        """Applies gradient clipping to the model parameters if `max_grad_norm` is set.
+        """
         if self.max_grad_norm: 
             nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
      
     def _get_grad_norm(self):
+        """Calculates and returns the gradient norm for each parameter if `track_grad_norm` is enabled.
+
+        Returns:
+            dict: A dictionary where keys are parameter names and values are their gradient norms.
+
+        Raises:
+            ValueError: If `wandb_` is not enabled but `track_grad_norm` is True.
+        """
         if self.track_grad_norm:
             assert self.wandb_, ValueError('wandb_ must be set to True if you want to track the gradient norm') 
             grad_norm_dict = {}
@@ -525,6 +585,8 @@ class Trainer:
             return grad_norm_dict 
             
     def _check_device_warn(self):
+        """Warns the user if training is being performed on CPU and prompts for continuation.
+        """
         if self.device.type == 'cpu':
             
             self.logger.warning(f'[Rank {self._get_local_rank()}] Training on CPU')
@@ -534,6 +596,15 @@ class Trainer:
                 sys.exit(0)
                 
     def _setup_parallel(self):
+        """Sets up the distributed training environment.
+
+        Initializes the process group for distributed training using NCCL backend.
+        Raises a RuntimeError if required environment variables are missing or if
+        distributed initialization fails.
+
+        Raises:
+            RuntimeError: If distributed environment variables are not set or initialization fails.
+        """
         if not dist.is_initialized():
             try:
                 local_rank = int(os.environ['LOCAL_RANK'])
@@ -565,23 +636,43 @@ class Trainer:
                 )
     
     def _cleanup(self):
+        """Destroys the distributed process group.
+        """
         
         self.logger.info(f"[Rank {self._get_local_rank()}] Cleaning up Distributed Process Group") 
         dist.destroy_process_group()
         
     def _get_device(self):
+        """Determines and returns the appropriate device (CUDA or CPU) for the current process.
+
+        Returns:
+            torch.device: The device to be used for computations.
+        """
         if dist.is_initialized():
             local_rank = int(os.environ.get('LOCAL_RANK', 0))
             return torch.device(f"cuda:{local_rank}")
         return torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
         
     def _check_dataloader_sampler(self):
+        """Ensures that the DataLoader's sampler is `DistributedSampler` when using DDP or FSDP.
+
+        Raises:
+            ValueError: If `parallel_type` is 'fsdp' or 'ddp' but the sampler is not `DistributedSampler`.
+        """
         if self.parallel_type in ['fsdp', 'ddp']:
             if not isinstance(self.dataloader.sampler, DistributedSampler):
                 raise ValueError('if parallel_type is fsdp or ddp, then the sampler of \
                                  the dataloader must DistributedSampler')
             
     def _get_model(self, model_config):
+        """Initializes the model and wraps it for distributed training if specified.
+
+        Args:
+            model_config (dict): Configuration dictionary for the model.
+
+        Returns:
+            torch.nn.Module: The initialized and potentially wrapped model.
+        """
         self.logger.info(f"[Rank {self._get_local_rank()}] Initializing Model")
         model = Athena(**model_config)
 
@@ -620,6 +711,15 @@ class Trainer:
             return model.cuda(int(os.environ.get('LOCAL_RANK', 0)))
             
     def _get_avg_rank_loss_pplx(self, loss, _val = None):
+        """Calculates the average loss and perplexity across all distributed ranks.
+
+        Args:
+            loss (torch.Tensor): The loss tensor from the current rank.
+            _val (Any, optional): A flag to indicate if it's a validation loss. Defaults to None.
+
+        Returns:
+            Tuple[torch.Tensor, float]: A tuple containing the averaged loss tensor and the averaged perplexity.
+        """
         if _val is not None:
             dist.all_reduce(loss, op = ReduceOp.SUM)  
             loss = loss / dist.get_world_size() 
@@ -633,6 +733,11 @@ class Trainer:
             return loss_avg_scalar, pplx_avg
         
     def _get_model_state_dict(self):
+        """Retrieves the model's state dictionary, handling DDP and FSDP specific state dict types.
+
+        Returns:
+            dict: The model's state dictionary.
+        """
        
         self.logger.info(f'[Rank {self._get_local_rank()}] Getting model state dict')    
         if self.parallel_type == 'ddp':
@@ -651,6 +756,11 @@ class Trainer:
                 return self.model.state_dict()
         
     def _get_optim_state_dict(self):
+        """Retrieves the optimizer's state dictionary, handling FSDP specific state dict types.
+
+        Returns:
+            dict: The optimizer's state dictionary.
+        """
         self.logger.info(f'[Rank {self._get_local_rank()}] Getting optimizer state dict')
         if self.parallel_type == 'fsdp':
             state_dict = FSDP.full_optim_state_dict(self.model, self.optimizer, rank0_only=True) 
@@ -664,6 +774,11 @@ class Trainer:
             return state_dict
 
     def _get_scheduler_state_dict(self):
+        """Retrieves the scheduler's state dictionary.
+
+        Returns:
+            dict: The scheduler's state dictionary.
+        """
         self.logger.info(f'[Rank {self._get_local_rank()}] Getting scheduler state dict')
         if self.parallel_type in ['fsdp', 'ddp']:
             state_dict = self.scheduler.state_dict() 
@@ -681,6 +796,18 @@ class Trainer:
         steps,
         global_steps
         ):
+        """Saves the model, optimizer, and scheduler state dictionaries as a checkpoint.
+
+        Optionally uploads the checkpoint and configuration to Hugging Face Hub.
+
+        Args:
+            model_state_dict (dict): The state dictionary of the model.
+            optim_state_dict (dict): The state dictionary of the optimizer.
+            scheduler_state_dict (dict): The state dictionary of the scheduler.
+            epoch (int): The current epoch number.
+            steps (int): The current local step number within the epoch.
+            global_steps (int): The current global step number across all epochs.
+        """
        
         # save_checkpoint_root_path originiates from the train_config.json as save_checkpoint_root_path
 
@@ -719,7 +846,7 @@ class Trainer:
                 api.upload_file(
                     path_or_fileobj = os.path.join(root_path, \
                         f'RUN_{self.run_id}_DATETIME_{self.run_start_date_time}_EPOCH_{epoch}_STEP_{steps}_GLOBAL_STEPS_{global_steps}.pt'),
-                    path_in_repo = os.path.join(self.hf_root_path, f'RUN_{self.run_id}', \
+                    path_in_repo = os.path.join(self.hf_root_path, f"RUN_{self.run_id}", \
                         f'RUN_{self.run_id}_DATETIME_{self.run_start_date_time}_EPOCH_{epoch}_STEP_{steps}_GLOBAL_STEPS_{global_steps}.pt'),
                     repo_id = self.hf_repo_id,
                     repo_type = self.hf_repo_type if self.hf_repo_type else None,
@@ -791,17 +918,33 @@ class Trainer:
             
             del model_state_dict, optim_state_dict, scheduler_state_dict
           
-    def _get_mixed_precision_dtype(self, mixed_precision_dtype=None):
-      
-        assert mixed_precision_dtype is not None, ValueError('mixed_precision_dtype must be specified')
-        if mixed_precision_dtype.lower() == "bf16":
+    def _get_mixed_precision_dtype(self):
+        """Converts a string representation of mixed precision dtype to a torch.dtype object.
+
+        This method is a helper for internal use within the Trainer class.
+
+        Returns:
+            torch.dtype: The corresponding torch.dtype object (torch.bfloat16 or torch.float16).
+
+        Raises:
+            ValueError: If the `mixed_precision` attribute is not 'bf16' or 'f16'.
+        """
+        if self.mixed_precision.lower() == "bf16":
             return torch.bfloat16
-        elif mixed_precision_dtype.lower() == "f16":
+        elif self.mixed_precision.lower() == "f16":
             return torch.float16
         else:
             raise ValueError(f"Invalid mixed precision dtype: {self.mixed_precision}, must be 'bf16' or 'f16'") 
             
     def _clr_mem(self, gc_ = False, cuda_clr_cache = True, *args, **kwargs):
+        """Clears memory by performing garbage collection and/or clearing CUDA cache.
+
+        Args:
+            gc_ (bool, optional): If True, performs Python garbage collection. Defaults to False.
+            cuda_clr_cache (bool, optional): If True, clears CUDA memory cache. Defaults to True.
+            *args: Positional arguments to be deleted.
+            **kwargs: Keyword arguments to be deleted.
+        """
         
         if gc_:
             self.logger.info(f'[Rank {self._get_local_rank()}] Collecting garbage.')
@@ -815,6 +958,11 @@ class Trainer:
             del kwargs[key] 
            
     def _get_val_dataloader(self):
+        """Loads validation data and creates a DataLoader for it.
+
+        Returns:
+            torch.utils.data.DataLoader: The DataLoader for the validation dataset.
+        """
         self.logger.info(f'[Rank {self._get_local_rank()}] Loading validation data.') 
         X_val, y_val = get_data(self.val_data_root_path)
         
@@ -832,6 +980,12 @@ class Trainer:
         return val_dataloader
     
     def _init_wandb(self):
+        """Initializes Weights & Biases for logging the training run.
+
+        This method sets up the Weights & Biases project, run name, entity, tags,
+        and notes based on the `wandb_config`. It also handles resuming from a
+        previous run if a checkpoint is being loaded.
+        """
         if self.wandb_:
             if dist.is_initialized() and dist.get_rank() != 0:
                 return
@@ -863,6 +1017,11 @@ class Trainer:
             self.logger.info(f'[Rank {self._get_local_rank()}] Initialized wandb at local_rank {self._get_local_rank()}')
 
     def _compile_warmup(self):
+        """Performs a warmup run for a compiled model.
+
+        This helps to optimize the model's performance by running a few forward passes
+        before the actual training loop begins, especially when `torch.compile` is used.
+        """
         if self._compile:
             self.logger.info(f"[Rank {self._get_local_rank()}] Running compile warmup")
             x = torch.randint(low = 0, high = self.vocab_size, size = (self.batch_size, self.context_length))
@@ -880,6 +1039,14 @@ class Trainer:
             raise ValueError(f"Invalid mixed precision dtype: {self.mixed_precision}, must be 'bf16' or 'f16'")
 
     def _get_log_level(self):
+        """Converts a string representation of a log level to its corresponding logging constant.
+
+        Returns:
+            int: The logging level constant (e.g., logging.INFO, logging.DEBUG).
+
+        Raises:
+            ValueError: If an invalid log level string is provided.
+        """
         if self.log_level.lower() == 'info':
             return logging.INFO
         elif self.log_level.lower() == 'warning':
@@ -894,6 +1061,20 @@ class Trainer:
             raise ValueError(f"Invalid log level: {self.log_level}")
 
     def setup_logger(self, log_level="INFO", log_root_path=None, return_date_time=False):
+        """Sets up the logger for the training process.
+
+        Configures console and file handlers for logging. If `log_root_path` is provided,
+        logs will be written to a file within that directory. Supports returning the
+        current datetime string for run identification.
+
+        Args:
+            log_level (str, optional): The minimum logging level to capture. Defaults to "INFO".
+            log_root_path (str, optional): The root directory for saving log files. Defaults to None.
+            return_date_time (bool, optional): If True, returns the current datetime string. Defaults to False.
+
+        Returns:
+            str or None: The current datetime string if `return_date_time` is True, otherwise None.
+        """
 
         self.logger.handlers = []
         self.logger.setLevel(log_level)
@@ -926,6 +1107,24 @@ class Trainer:
             return date_time
 
     def get_scheduler(self, optimizer, warmup_steps, constant_steps, decay_steps, max_lr, min_lr, *args, **kwargs):
+        """Creates a learning rate scheduler with a warm-up, constant, and decay phase.
+
+        The scheduler implements a cosine decay annealing schedule after a linear warm-up
+        and a constant learning rate period.
+
+        Args:
+            optimizer (torch.optim.Optimizer): The optimizer for which to create the scheduler.
+            warmup_steps (int): Number of steps for the linear warm-up phase.
+            constant_steps (int): Number of steps for the constant learning rate phase.
+            decay_steps (int): Number of steps for the cosine decay phase.
+            max_lr (float): The maximum learning rate during the constant phase.
+            min_lr (float): The minimum learning rate after decay.
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            torch.optim.lr_scheduler.LambdaLR: The configured learning rate scheduler.
+        """
         base_lr = optimizer.defaults["lr"]
 
         if not min_lr <= base_lr <= max_lr:
@@ -955,9 +1154,22 @@ class Trainer:
         return LambdaLR(optimizer, lr_lambda)
 
     def _get_local_rank(self):
+        """Retrieves the local rank of the current process from environment variables.
+
+        Returns:
+            int: The local rank of the current process.
+        """
         return int(os.environ['LOCAL_RANK'])
 
     def get_run_id(self):
+        """Prompts the user for a run ID and ensures it's consistent across distributed processes.
+
+        If running in a distributed environment, rank 0 prompts for the ID and broadcasts it
+        to other ranks. If not distributed, it directly prompts the user.
+
+        Returns:
+            str: The 3-digit integer run ID entered by the user.
+        """
         was_initialized = dist.is_initialized()
         original_backend = dist.get_backend() if was_initialized else None
         
@@ -998,6 +1210,18 @@ class Trainer:
                 dist.init_process_group(backend=original_backend, init_method='env://')
             
     def _load_checkpoint(self, checkpoint_path):
+        """Loads a model, optimizer, and scheduler state from a checkpoint file.
+
+        Args:
+            checkpoint_path (str): The path to the checkpoint file.
+
+        Returns:
+            Tuple[int, int, int]: A tuple containing the epoch, global steps, and local steps from the checkpoint.
+
+        Raises:
+            KeyError: If required keys (model, global_steps, local_steps, epoch) are not found in the checkpoint.
+            ValueError: If the number of parameter groups in the optimizer does not match the checkpoint.
+        """
         self.logger.info(f"[Rank {self._get_local_rank()}] Loading checkpoint from {checkpoint_path}") 
         checkpoint = torch.load(checkpoint_path, map_location='cpu')
         
@@ -1070,6 +1294,13 @@ class Trainer:
         This matches the commonly used GPT/Athena weight-decay scheme and guarantees
         we always end up with exactly two param groups, independent of model size,
         so `load_state_dict` never complains about a group-count mismatch.
+
+        Args:
+            model (nn.Module): The model whose parameters are to be grouped.
+            optim_cfg (dict): The optimizer configuration dictionary, typically containing 'weight_decay'.
+
+        Returns:
+            list: A list of dictionaries, each representing a parameter group for the optimizer.
         """
 
         weight_decay = optim_cfg.get("weight_decay", 0.0)
@@ -1089,18 +1320,27 @@ class Trainer:
         ]
 
     def _restore_console_logging(self):
+        """Restores console logging handlers that might have been temporarily removed.
+        """
         if hasattr(self, 'console_handlers'):
             for handler in self.console_handlers:
                 if handler not in self.logger.handlers:  
                     self.logger.addHandler(handler)
 
     def _ascii_art_model_name(self):
+        """Prints the model series name as ASCII art to the console.
+        """
         fig = Figlet(font='larry3d')
         ascii_art = fig.renderText(f"{self.model_series_name}")
         colored_art = colored(ascii_art, color='red')
         print(colored_art, flush=True)
 
     def _setup_nccl_logging(self, _unset=False):
+        """Sets up or unsets NCCL logging environment variables.
+
+        Args:
+            _unset (bool, optional): If True, unsets NCCL logging environment variables. Defaults to False.
+        """
         rank = self._get_local_rank()
         self.logger.info(f"[Rank {rank}] Setting up NCCL logging")
 
@@ -1187,6 +1427,11 @@ class Trainer:
     '''
 
     def _rm_logs_for_run_id(self):
+        """Removes log files associated with the current run ID.
+
+        This method is called if `rm_logs_for_run_id` is True during initialization,
+        ensuring a clean slate for logging for a specific run.
+        """
         self.logger.info(f"Removing logs for run id: {self.run_id}")
         if self.rm_logs_for_run_id:
             logs_dir = os.listdir(self.log_root_path)  
@@ -1198,6 +1443,19 @@ class Trainer:
 
 @contextmanager
 def supress_logging(logger, disable=None, disable_exclude=None):
+    """A context manager to temporarily suppress logging output for specific ranks.
+
+    Args:
+        logger (logging.Logger): The logger instance to modify.
+        disable (Union[bool, int], optional): If True, disables logging for all ranks.
+                                             If an int, disables logging for that specific rank.
+                                             Defaults to None.
+        disable_exclude (int, optional): If an int, disables logging for all ranks EXCEPT that specific rank.
+                                        Defaults to None.
+
+    Raises:
+        ValueError: If neither `disable` nor `disable_exclude` is provided, or if both are provided.
+    """
     
     if disable is None and disable_exclude is None:
         raise ValueError('Either disable or disable_exclude must be provided')
@@ -1229,6 +1487,16 @@ def supress_logging(logger, disable=None, disable_exclude=None):
         yield
         
 class TeeHandler:
+    """A custom logging handler that duplicates output to a file and stdout/stderr.
+
+    This class acts as a proxy for `sys.stdout` and `sys.stderr`, ensuring that
+    all print statements and error messages are simultaneously written to a
+    specified file and the original console output.
+
+    Attributes:
+        file (file object): The file object to which output is written.
+        stdout (file object): The original `sys.stdout`.
+    """
     def __init__(self, filename):
         self.file = open(filename, 'a')
         self.stdout = sys.stdout

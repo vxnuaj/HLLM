@@ -30,6 +30,14 @@ from model.blocks import TransformerBlock
 from model.model import Athena
 
 def load_config(path: str):
+    """Loads a YAML configuration file and converts specified string-based torch.dtypes to actual torch.dtype objects.
+
+    Args:
+        path (str): The path to the YAML configuration file.
+
+    Returns:
+        dict: The loaded configuration with torch.dtype strings converted.
+    """
     with open(path, 'r') as f:
         config = yaml.safe_load(f)
     
@@ -47,6 +55,20 @@ def load_config(path: str):
     return config
 
 def generate_config_combinations(config):
+    """Generates all valid combinations of configurations from a given dictionary.
+
+    This function takes a configuration dictionary where values can be single items or lists.
+    It expands lists into all possible combinations and applies specific filtering rules
+    (e.g., setting 'n_groups' to None if 'attn_type' is not 'gqa').
+
+    Args:
+        config (dict): A dictionary where keys are configuration parameters and values are
+                       either single values or lists of possible values.
+
+    Returns:
+        list: A list of dictionaries, where each dictionary represents a unique and valid
+              combination of configuration parameters.
+    """
     for k, v in config.items():
         if not isinstance(v, list):
             config[k] = [v]
@@ -73,6 +95,17 @@ def prof_single_forward_pt(
     vocab_size, 
     use_mixed_precision=False
     ):
+    """Profiles a single forward pass of the model using PyTorch's profiler.
+
+    Args:
+        model (torch.nn.Module): The model to profile.
+        data_shape (tuple): The shape of the input data (e.g., (batch_size, sequence_length)).
+        vocab_size (int): The size of the vocabulary for generating random input data.
+        use_mixed_precision (bool, optional): Whether to use mixed precision for the forward pass. Defaults to False.
+
+    Returns:
+        str: The path to the exported Chrome trace file.
+    """
     input_data = torch.randint(0, vocab_size, size=data_shape, device=next(model.parameters()).device)
     with torch.profiler.profile(
         activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],
@@ -92,6 +125,18 @@ def time_avg_forward(
     n_inf_passes, 
     use_mixed_precision=False
     ):
+    """Measures the average time for a single forward pass of the model.
+
+    Args:
+        model (torch.nn.Module): The model to measure.
+        data_shape (tuple): The shape of the input data (e.g., (batch_size, sequence_length)).
+        vocab_size (int): The size of the vocabulary for generating random input data.
+        n_inf_passes (int): Number of inference passes to average over.
+        use_mixed_precision (bool, optional): Whether to use mixed precision for the forward pass. Defaults to False.
+
+    Returns:
+        float: The average time taken for a forward pass in seconds.
+    """
     
     device = next(model.parameters()).device
     input_data = torch.randint(0, vocab_size, size=data_shape, device=device)
@@ -119,6 +164,18 @@ def time_avg_backward(
     n_bck_passes, 
     use_mixed_precision=False
     ):
+    """Measures the average time for a single backward pass of the model.
+
+    Args:
+        model (torch.nn.Module): The model to measure.
+        data_shape (tuple): The shape of the input data (e.g., (batch_size, sequence_length)).
+        vocab_size (int): The size of the vocabulary for generating random input data.
+        n_bck_passes (int): Number of backward passes to average over.
+        use_mixed_precision (bool, optional): Whether to use mixed precision for the backward pass. Defaults to False.
+
+    Returns:
+        float: The average time taken for a backward pass in seconds.
+    """
     
     device = next(model.parameters()).device
     input_data = torch.randint(0, vocab_size, size=data_shape, device=device)
@@ -155,6 +212,18 @@ def time_avg_fwd_backward(
     n_iter, 
     use_mixed_precision=False
     ):
+    """Measures the average time for a combined forward and backward pass of the model.
+
+    Args:
+        model (torch.nn.Module): The model to measure.
+        data_shape (tuple): The shape of the input data (e.g., (batch_size, sequence_length)).
+        vocab_size (int): The size of the vocabulary for generating random input data.
+        n_iter (int): Number of forward-backward passes to average over.
+        use_mixed_precision (bool, optional): Whether to use mixed precision for the passes. Defaults to False.
+
+    Returns:
+        float: The average time taken for a forward-backward pass in seconds.
+    """
     
     device = next(model.parameters()).device
     input_data = torch.randint(0, vocab_size, size=data_shape, device=device)
@@ -184,6 +253,19 @@ def time_avg_fwd_backward(
     return float(np.mean(times)) if times else 0.0
 
 def wrap_model(model, parallel_type, fsdp_wrap_policy="auto"):
+    """Wraps the model with the specified parallelization strategy.
+
+    Args:
+        model (torch.nn.Module): The model to wrap.
+        parallel_type (str): The type of parallelization to use ('none', 'ddp', or 'fsdp').
+        fsdp_wrap_policy (str, optional): The FSDP wrapping policy ('auto' or 'transformer'). Defaults to "auto".
+
+    Returns:
+        torch.nn.Module: The wrapped model.
+
+    Raises:
+        ValueError: If an unknown `fsdp_wrap_policy` or `parallel_type` is provided.
+    """
     if parallel_type == "none":
         return model
     if parallel_type == "ddp":
@@ -200,6 +282,14 @@ def wrap_model(model, parallel_type, fsdp_wrap_policy="auto"):
         raise ValueError(f"Unknown parallel type: {parallel_type}")
 
 def warmup_compile(model, compile_wamrup_steps, vocab_size, data_shape):
+    """Performs warmup steps for a compiled model.
+
+    Args:
+        model (torch.nn.Module): The compiled model to warm up.
+        compile_wamrup_steps (int): The number of warmup steps.
+        vocab_size (int): The size of the vocabulary for generating random input data.
+        data_shape (tuple): The shape of the input data (e.g., (batch_size, sequence_length)).
+    """
     device = next(model.parameters()).device
     input_data = torch.randint(0, vocab_size, size = data_shape, device = device)
     for _ in range(compile_wamrup_steps):
@@ -216,6 +306,23 @@ def run_profs(
     profile_forward: bool = False,
     compile_warmup_steps:int = 5,
     ):
+    """Runs profiling for various model configurations and saves the results.
+
+    This function iterates through different model configurations defined in a YAML file,
+    initializes models, applies parallelization strategies, and measures forward, backward,
+    and combined forward-backward pass times. It also supports profiling a single forward pass.
+
+    Args:
+        cfg_path (str): Path to the YAML configuration file defining the sweep space.
+        data_shape (tuple): Shape of the input data for profiling (e.g., (batch_size, sequence_length)).
+        vocab_size (int, optional): Vocabulary size for generating input data. Defaults to 10000.
+        n_inf_passes (int, optional): Number of inference passes to average for timing. Defaults to 50.
+        n_bck_passes (int, optional): Number of backward passes to average for timing. Defaults to 50.
+        n_fwd_bck_iter (int, optional): Number of forward-backward iterations to average for timing. Defaults to 50.
+        results_root (str, optional): Root directory to save profiling results. Defaults to "conf_prof/results/results_json".
+        profile_forward (bool, optional): Whether to perform a detailed forward pass profile. Defaults to False.
+        compile_warmup_steps (int, optional): Number of warmup steps for compiled models. Defaults to 5.
+    """
    
     local_rank = int(os.environ['LOCAL_RANK']) 
     torch.cuda.set_device(local_rank)

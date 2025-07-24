@@ -31,7 +31,18 @@ if os.getenv("HF_TOKEN"):
 
 @dataclass
 class InferenceConfig:
-    """Configuration for inference parameters with validation"""
+    """Configuration for inference parameters with validation.
+
+    Attributes:
+        quantization_wbits (Optional[int]): Number of bits for weight quantization.
+        quantization_method (Optional[str]): Method for weight quantization (e.g., 'gptq', 'awq').
+        quantize_kvcache_method (Optional[str]): Method for KV cache quantization.
+        quantize_kvcache (Optional[int]): Number of bits for KV cache quantization.
+        model_execution_backend (str): Backend for model execution (e.g., 'eager', 'torch.compile').
+        torch_compile_backend (Optional[str]): Backend for `torch.compile` (e.g., 'inductor').
+        torch_compile_mode (Optional[str]): Mode for `torch.compile` (e.g., 'default').
+        decoding (str): Decoding method (e.g., 'base', 'speculative').
+    """
     quantization_wbits: Optional[int] = None
     quantization_method: Optional[str] = None
     quantize_kvcache_method: Optional[str] = None
@@ -42,6 +53,12 @@ class InferenceConfig:
     decoding: str = "base"
     
     def __post_init__(self):
+        """Performs post-initialization validation of configuration parameters.
+
+        Raises:
+            ValueError: If `quantization_wbits` is set without `quantization_method`,
+                        or vice-versa. Similar validation for KV cache quantization.
+        """
         if self.quantization_method and not self.quantization_wbits:
             raise ValueError("quantization_wbits must be set when quantization_method is specified")
         if self.quantization_wbits and not self.quantization_method:
@@ -52,18 +69,42 @@ class InferenceConfig:
             raise ValueError("quantize_kvcache_method must be set when quantize_kvcache is specified")
     
     def to_dict(self) -> Dict[str, Any]:
+        """Converts the InferenceConfig object to a dictionary.
+
+        Returns:
+            Dict[str, Any]: A dictionary representation of the configuration.
+        """
         return asdict(self)
 
 
 class StoppingCriteriaSub(StoppingCriteria):
-    """Custom stopping criteria for generation"""
+    """Custom stopping criteria for text generation.
+
+    This class allows generation to stop when a specific sequence of tokens is encountered.
+
+    Attributes:
+        stops (List[List[int]]): A list of token ID sequences that, if found at the end of the generated text, will stop the generation.
+    """
     
     def __init__(self, stops: List[List[int]] = None):
+        """Initializes the StoppingCriteriaSub.
+
+        Args:
+            stops (List[List[int]], optional): A list of token ID sequences to stop generation. Defaults to None.
+        """
         super().__init__()
         self.stops = stops or []
     
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> bool:
-        """Check if generation should stop"""
+        """Checks if generation should stop based on the presence of stop sequences.
+
+        Args:
+            input_ids (torch.LongTensor): The generated token IDs so far.
+            scores (torch.FloatTensor): The scores of the generated tokens.
+
+        Returns:
+            bool: True if generation should stop, False otherwise.
+        """
         for stop_seq in self.stops:
             if len(input_ids[0]) >= len(stop_seq):
                 if input_ids[0][-len(stop_seq):].tolist() == stop_seq:
@@ -71,15 +112,19 @@ class StoppingCriteriaSub(StoppingCriteria):
         return False
 
 def load_config(config_path: Union[str, Path], config_id: Optional[str] = None) -> Dict[str, Any]:
-    """
-    Load configuration from JSON or YAML file
-    
+    """Loads configuration from a JSON or YAML file.
+
     Args:
-        config_path: Path to configuration file
-        config_id: Optional identifier for logging
-        
+        config_path (Union[str, Path]): Path to the configuration file.
+        config_id (Optional[str], optional): Optional identifier for logging purposes. Defaults to None.
+
     Returns:
-        Loaded configuration dictionary
+        Dict[str, Any]: The loaded configuration dictionary.
+
+    Raises:
+        FileNotFoundError: If the configuration file does not exist.
+        ValueError: If the configuration file format is unsupported.
+        Exception: If loading the configuration fails for any other reason.
     """
     config_path = Path(config_path)
     
@@ -104,16 +149,18 @@ def load_config(config_path: Union[str, Path], config_id: Optional[str] = None) 
         raise
 
 def load_tokenizer(tokenizer_path: str, tokenizer_type: str = "AutoTokenizer", **kwargs) -> Union[AutoTokenizer, PreTrainedTokenizerFast]:
-    """
-    Load tokenizer from HuggingFace or local path
-    
+    """Loads a tokenizer from HuggingFace or a local path.
+
     Args:
-        tokenizer_path: Path to tokenizer
-        tokenizer_type: Type of tokenizer to load
-        **kwargs: Additional arguments for tokenizer
-        
+        tokenizer_path (str): Path to the tokenizer files or HuggingFace model ID.
+        tokenizer_type (str, optional): The type of tokenizer to load ('AutoTokenizer' or 'PreTrainedTokenizerFast'). Defaults to "AutoTokenizer".
+        **kwargs: Additional arguments to pass to the tokenizer's `from_pretrained` method.
+
     Returns:
-        Loaded tokenizer
+        Union[AutoTokenizer, PreTrainedTokenizerFast]: The loaded tokenizer instance.
+
+    Raises:
+        Exception: If loading the tokenizer fails.
     """
     try:
         if tokenizer_type == "PreTrainedTokenizerFast":
@@ -133,17 +180,22 @@ def load_model(
     tokenizer_config: Optional[Dict[str, Any]] = None,
     **model_kwargs
 ) -> Union[AutoModelForCausalLM, Tuple[AutoModelForCausalLM, AutoTokenizer]]:
-    """
-    Load model and optionally tokenizer
-    
+    """Loads a pre-trained model and optionally its tokenizer from a specified path.
+
     Args:
-        model_path: Path to model
-        return_tokenizer: Whether to return tokenizer
-        tokenizer_config: Configuration for tokenizer loading
-        **model_kwargs: Additional arguments for model loading
-        
+        model_path (str): The path to the pre-trained model files or HuggingFace model ID.
+        return_tokenizer (bool, optional): If True, the function will also return the tokenizer. Defaults to False.
+        tokenizer_config (Optional[Dict[str, Any]], optional): Configuration for loading the tokenizer.
+                                                                If None, `model_path` is used for tokenizer loading.
+                                                                Defaults to None.
+        **model_kwargs: Additional arguments to pass to the model's `from_pretrained` method.
+
     Returns:
-        Model or (model, tokenizer) tuple
+        Union[AutoModelForCausalLM, Tuple[AutoModelForCausalLM, AutoTokenizer]]:
+            The loaded model, or a tuple of (model, tokenizer) if `return_tokenizer` is True.
+
+    Raises:
+        Exception: If loading the model or tokenizer fails.
     """
     try:
         logger.info(f"Loading model from {model_path}")
@@ -163,14 +215,20 @@ def load_model(
         raise
 
 def create_combinations(sweep_config: Dict[str, List[Any]]) -> List[InferenceConfig]:
-    """
-    Create all valid hyperparameter combinations from sweep configuration
-    
+    """Generates all valid hyperparameter combinations from a given sweep configuration.
+
+    This function takes a dictionary defining the sweep space, where each key maps
+    to a list of possible values. It creates `InferenceConfig` objects for all
+    permissible combinations, handling interdependencies (e.g., quantization bits
+    and methods).
+
     Args:
-        sweep_config: Dictionary containing parameter lists
-        
+        sweep_config (Dict[str, List[Any]]): A dictionary where keys are parameter names
+                                            and values are lists of their possible settings.
+
     Returns:
-        List of valid InferenceConfig objects
+        List[InferenceConfig]: A list of `InferenceConfig` objects, each representing a unique
+                               and valid combination of inference parameters.
     """
     logger.info("Generating hyperparameter combinations from sweep configuration")
     
@@ -261,17 +319,19 @@ def apply_quantization(
     wbits: int,
     calibration_data: Optional[torch.Tensor] = None
 ) -> Tuple[torch.nn.Module, Optional[Any]]:
-    """
-    Apply quantization to model
-    
+    """Applies a specified quantization method to the model.
+
     Args:
-        model: PyTorch model
-        method: Quantization method
-        wbits: Weight bits for quantization
-        calibration_data: Optional calibration data
-        
+        model (torch.nn.Module): The PyTorch model to quantize.
+        method (str): The quantization method to apply (e.g., 'gptq', 'awq').
+        wbits (int): The number of bits for weight quantization.
+        calibration_data (Optional[torch.Tensor], optional): Optional data for calibration during quantization. Defaults to None.
+
     Returns:
-        Tuple of (quantized_model, quantizers)
+        Tuple[torch.nn.Module, Optional[Any]]: A tuple containing the quantized model and any associated quantizers.
+
+    Raises:
+        Exception: If the quantization process fails.
     """
     logger.info(f"Applying quantization: {method} with {wbits} bits")
     
@@ -292,16 +352,18 @@ def compile_model(
     backend: str = "inductor",
     mode: str = "default"
 ) -> torch.nn.Module:
-    """
-    Compile model with torch.compile
-    
+    """Compiles a PyTorch model using `torch.compile`.
+
     Args:
-        model: PyTorch model
-        backend: Compilation backend
-        mode: Compilation mode
-        
+        model (torch.nn.Module): The PyTorch model to compile.
+        backend (str, optional): The backend for `torch.compile` (e.g., 'inductor', 'eager'). Defaults to "inductor".
+        mode (str, optional): The compilation mode (e.g., 'default', 'reduce-overhead'). Defaults to "default".
+
     Returns:
-        Compiled model
+        torch.nn.Module: The compiled model.
+
+    Raises:
+        Exception: If model compilation fails.
     """
     logger.info(f"Compiling model with backend={backend}, mode={mode}")
     
@@ -317,16 +379,15 @@ def apply_config_to_model(
     config: InferenceConfig,
     calibration_data: Optional[torch.Tensor] = None
 ) -> Tuple[torch.nn.Module, Optional[Any]]:
-    """
-    Apply inference configuration to model
-    
+    """Applies a given inference configuration to a model, including quantization and compilation.
+
     Args:
-        model: Base model
-        config: Inference configuration
-        calibration_data: Optional calibration data for quantization
-        
+        model (torch.nn.Module): The base model to configure.
+        config (InferenceConfig): The inference configuration to apply.
+        calibration_data (Optional[torch.Tensor], optional): Optional calibration data for quantization. Defaults to None.
+
     Returns:
-        Tuple of (configured_model, quantizers)
+        Tuple[torch.nn.Module, Optional[Any]]: A tuple containing the configured model and any associated quantizers.
     """
     logger.info(f"Applying configuration: {config}")
     
@@ -351,12 +412,11 @@ def apply_config_to_model(
 
 
 def save_results(results: List[Dict], output_path: Union[str, Path]) -> None:
-    """
-    Save sweep results to file
-    
+    """Saves a list of sweep results to a JSON file.
+
     Args:
-        results: List of result dictionaries
-        output_path: Path to save results
+        results (List[Dict]): A list of dictionaries, where each dictionary represents the results of an inference configuration.
+        output_path (Union[str, Path]): The path to the file where the results will be saved.
     """
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -384,35 +444,40 @@ def run_inference_sweep(
     max_new_tokens: int = 512,
     **inference_kwargs
 ) -> List[Dict]:
-    """
-    Run complete inference sweep with proper generation and timing
-    
+    """Runs a comprehensive inference sweep over various model configurations.
+
+    This function loads a base model, generates all combinations of inference
+    configurations from a sweep configuration file, applies these configurations
+    (including quantization and compilation), and measures inference times and losses.
+    Results are saved to a specified output path.
+
     Args:
-        model_path: Path to base model
-        sweep_config_path: Path to sweep configuration
-        output_path: Path to save results
-        tokenizer_path: Optional path to tokenizer
-        calibration_data_path: Optional path to calibration data
-        assistant_model_path: Optional path to assistant model for speculative decoding
-        X_tensor_path: Path to input tensor for inference
-        y_tensor_path: Path to target tensor for loss calculation
-        inference_batch_size: Batch size for inference  
-        inference_seed_seq_len: Seed sequence length
-        top_k: Top-k sampling parameter
-        top_p: Top-p sampling parameter
-        inference_iter: Number of inference iterations for averaging
-        max_new_tokens: Maximum new tokens to generate
-        **inference_kwargs: Additional inference arguments
-        
+        model_path (str): Path to the base model to be used for the sweep.
+        sweep_config_path (str): Path to the YAML or JSON file defining the sweep configuration.
+        output_path (str): Path to the file where the sweep results will be saved.
+        tokenizer_path (Optional[str], optional): Path to the tokenizer. If None, `model_path` is used. Defaults to None.
+        calibration_data_path (Optional[str], optional): Path to calibration data for quantization. Defaults to None.
+        assistant_model_path (Optional[str], optional): Path to an assistant model for speculative decoding. Defaults to None.
+        X_tensor_path (Optional[str], optional): Path to the input tensor (X) for inference. Defaults to None.
+        y_tensor_path (Optional[str], optional): Path to the target tensor (y) for loss calculation. Defaults to None.
+        inference_batch_size (int, optional): Batch size to use during inference. Defaults to 16.
+        inference_seed_seq_len (int, optional): Length of the seed sequence for generation. Defaults to 10.
+        top_k (int, optional): The number of highest probability vocabulary tokens to keep for top-k sampling. Defaults to 50.
+        top_p (float, optional): The cumulative probability for top-p (nucleus) sampling. Defaults to 0.9.
+        inference_iter (int, optional): Number of inference iterations to average for timing. Defaults to 10.
+        max_new_tokens (int, optional): Maximum number of new tokens to generate. Defaults to 512.
+        **inference_kwargs: Additional keyword arguments to pass to the model's `generate` method.
+
     Returns:
-        List of sweep results
+        List[Dict]: A list of dictionaries, where each dictionary contains the configuration
+                    and measured metrics for a single inference run.
     """
     
     sweep_config = load_config(sweep_config_path, "sweep")
     configs = create_combinations(sweep_config)
     
     base_model = load_model(model_path)
-    tokenizer = load_tokenizer(tokenizer_path or model_path)
+#    tokenizer = load_tokenizer(tokenizer_path or model_path)
     
     assistant_model = None
     if assistant_model_path:

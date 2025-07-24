@@ -16,10 +16,8 @@ except ImportError as e:
     logging.warning(f"Some transformers imports failed: {e}")
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'model'))
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'package', 'gptq'))
 
 try:
-    from gptq import GPTQ
     from model import Athena
 except ImportError as e:
     logging.warning(f"Local model imports failed: {e}")
@@ -28,7 +26,18 @@ logger = logging.getLogger(__name__)
 
 
 def load_config(config_path: str) -> dict:
-    """Load configuration from JSON file"""
+    """Loads configuration from a JSON file.
+
+    Args:
+        config_path (str): The path to the JSON configuration file.
+
+    Returns:
+        dict: The loaded configuration as a dictionary.
+
+    Raises:
+        FileNotFoundError: If the configuration file does not exist.
+        json.JSONDecodeError: If the configuration file is not a valid JSON.
+    """
     try:
         with open(config_path, 'r') as f:
             return json.load(f)
@@ -37,7 +46,19 @@ def load_config(config_path: str) -> dict:
         raise
 
 def load_weights_model(model: torch.nn.Module, weights_path: str) -> Tuple[torch.nn.Module, dict]:
-    """Load weights into model from checkpoint"""
+    """Loads weights into a given model from a PyTorch checkpoint file.
+
+    Args:
+        model (torch.nn.Module): The model to load weights into.
+        weights_path (str): The path to the PyTorch checkpoint file.
+
+    Returns:
+        Tuple[torch.nn.Module, dict]: A tuple containing the model with loaded weights and any additional metadata from the checkpoint.
+
+    Raises:
+        FileNotFoundError: If the weights file does not exist.
+        Exception: If loading weights fails for any other reason.
+    """
     if not os.path.exists(weights_path):
         raise FileNotFoundError(f"Weights file not found: {weights_path}")
     
@@ -63,7 +84,18 @@ def load_tokenizer(
     bos_token: str = "<|bos|>", 
     pad_token: str = " "
 ) -> PreTrainedTokenizerFast:
-    """Load and configure tokenizer"""
+    """Loads and configures a tokenizer from a file.
+
+    Args:
+        tokenizer_file (str): The path to the tokenizer file.
+        confirm_special_toks (bool, optional): If True, prints the special tokens (EOS, BOS, PAD). Defaults to True.
+        eos_token (str, optional): The end-of-sequence token string. Defaults to "<|eos|>".
+        bos_token (str, optional): The beginning-of-sequence token string. Defaults to "<|bos|>".
+        pad_token (str, optional): The padding token string. Defaults to " ".
+
+    Returns:
+        PreTrainedTokenizerFast: The loaded and configured tokenizer.
+    """
     tokenizer = PreTrainedTokenizerFast(
         tokenizer_file=tokenizer_file,
         eos_token=eos_token,
@@ -79,7 +111,15 @@ def load_tokenizer(
     return tokenizer
 
 def get_model_name_or_path(model: torch.nn.Module, fallback: str = "athena") -> str:
-    """Get model name or path with fallback"""
+    """Retrieves the model's name or path from its configuration, with a fallback option.
+
+    Args:
+        model (torch.nn.Module): The model instance.
+        fallback (str, optional): The fallback name to use if the model's name/path cannot be determined. Defaults to "athena".
+
+    Returns:
+        str: The determined model name or path.
+    """
     if hasattr(model, 'config') and hasattr(model.config, 'name_or_path'):
         return model.config.name_or_path
     elif hasattr(model, 'name_or_path'):
@@ -100,7 +140,18 @@ def save_model_hub_and_local(
     model_name: str,
     method_suffix: str = ""
 ):
-    """Unified model saving function"""
+    """Saves the model and optionally its tokenizer to Hugging Face Hub and/or locally.
+
+    Args:
+        model (torch.nn.Module): The model to save.
+        tokenizer (Optional[PreTrainedTokenizerFast]): The tokenizer to save alongside the model. Can be None.
+        save_hf (bool): If True, saves the model to Hugging Face Hub.
+        save_local (bool): If True, saves the model locally.
+        hf_path (str): The Hugging Face repository ID or path.
+        local_path (str): The local directory path to save the model.
+        model_name (str): The base name for the model files/repository.
+        method_suffix (str, optional): A suffix to append to the model name (e.g., indicating quantization method). Defaults to "".
+    """
     if not (save_hf or save_local):
         return
     
@@ -139,7 +190,24 @@ def quantize_gptq(
     percdamp: float = 0.01,
     **kwargs
 ) -> torch.nn.Module:
-    """Apply GPTQ quantization"""
+    """Applies GPTQ quantization to the model.
+
+    Args:
+        model (torch.nn.Module): The model to quantize.
+        quantization_bits (int, optional): The number of bits for quantization. Defaults to 4.
+        calibration_data (Optional[torch.Tensor], optional): Data used for calibration during quantization. Defaults to None.
+        tokenizer (Optional[PreTrainedTokenizerFast], optional): The tokenizer associated with the model. Defaults to None.
+        groupsize (int, optional): The group size for quantization. Defaults to 128.
+        nsamples (int, optional): Number of samples to use for calibration. Defaults to 128.
+        percdamp (float, optional): Percentage damping for quantization. Defaults to 0.01.
+        **kwargs: Additional keyword arguments for GPTQConfig.
+
+    Returns:
+        torch.nn.Module: The quantized model.
+
+    Raises:
+        Exception: If GPTQ quantization fails.
+    """
     logger.info('Initializing GPTQ Quantization.')
     
     try:
@@ -180,7 +248,22 @@ def quantize_awq(
     fuse_max_seq_len: int = 512,
     **kwargs
 ) -> torch.nn.Module:
-    """Apply AWQ quantization"""
+    """Applies AWQ quantization to the model.
+
+    Args:
+        model (torch.nn.Module): The model to quantize.
+        quantization_bits (int, optional): The number of bits for quantization. Defaults to 4.
+        group_size (int, optional): The group size for quantization. Defaults to 128.
+        do_fuse (bool, optional): Whether to fuse operations during quantization. Defaults to True.
+        fuse_max_seq_len (int, optional): Maximum sequence length for fused operations. Defaults to 512.
+        **kwargs: Additional keyword arguments for AwqConfig.
+
+    Returns:
+        torch.nn.Module: The quantized model.
+
+    Raises:
+        Exception: If AWQ quantization fails.
+    """
     logger.info("Initializing AWQ Quantization")
     
     try:
@@ -208,7 +291,19 @@ def quantize_awq(
         raise
 
 def quantize_quanto(model: torch.nn.Module, quantization_bits: int = 4, **kwargs) -> torch.nn.Module:
-    """Apply Quanto quantization"""
+    """Applies Quanto quantization to the model.
+
+    Args:
+        model (torch.nn.Module): The model to quantize.
+        quantization_bits (int, optional): The number of bits for quantization. Defaults to 4.
+        **kwargs: Additional keyword arguments for QuantoConfig.
+
+    Returns:
+        torch.nn.Module: The quantized model.
+
+    Raises:
+        Exception: If Quanto quantization fails.
+    """
     logger.info("Initializing Quanto Quantization")
     
     try:
@@ -227,7 +322,19 @@ def quantize_quanto(model: torch.nn.Module, quantization_bits: int = 4, **kwargs
         raise
 
 def quantize_aqlm(model: torch.nn.Module, quantization_bits: int = 4, **kwargs) -> torch.nn.Module:
-    """Apply AQLM quantization"""
+    """Applies AQLM quantization to the model.
+
+    Args:
+        model (torch.nn.Module): The model to quantize.
+        quantization_bits (int, optional): The number of bits for quantization. Defaults to 4.
+        **kwargs: Additional keyword arguments for AqlmConfig.
+
+    Returns:
+        torch.nn.Module: The quantized model.
+
+    Raises:
+        Exception: If AQLM quantization fails.
+    """
     logger.info("Initializing AQLM Quantization")
     
     try:
@@ -246,7 +353,19 @@ def quantize_aqlm(model: torch.nn.Module, quantization_bits: int = 4, **kwargs) 
         raise
 
 def quantize_vptq(model: torch.nn.Module, quantization_bits: int = 4, **kwargs) -> torch.nn.Module:
-    """Apply VPTQ quantization"""
+    """Applies VPTQ quantization to the model.
+
+    Args:
+        model (torch.nn.Module): The model to quantize.
+        quantization_bits (int, optional): The number of bits for quantization. Defaults to 4.
+        **kwargs: Additional keyword arguments for VptqConfig.
+
+    Returns:
+        torch.nn.Module: The quantized model.
+
+    Raises:
+        Exception: If VPTQ quantization fails.
+    """
     logger.info("Initializing VPTQ Quantization")
     
     try:
@@ -265,7 +384,19 @@ def quantize_vptq(model: torch.nn.Module, quantization_bits: int = 4, **kwargs) 
         raise
 
 def quantize_hqq(model: torch.nn.Module, quantization_bits: int = 4, **kwargs) -> torch.nn.Module:
-    """Apply HQQ quantization"""
+    """Applies HQQ quantization to the model.
+
+    Args:
+        model (torch.nn.Module): The model to quantize.
+        quantization_bits (int, optional): The number of bits for quantization. Defaults to 4.
+        **kwargs: Additional keyword arguments for HqqConfig.
+
+    Returns:
+        torch.nn.Module: The quantized model.
+
+    Raises:
+        Exception: If HQQ quantization fails.
+    """
     logger.info("Initializing HQQ Quantization")
     
     try:
@@ -284,7 +415,20 @@ def quantize_hqq(model: torch.nn.Module, quantization_bits: int = 4, **kwargs) -
         raise
 
 def quantize_bitsandbytes(model: torch.nn.Module, quantization_bits: int = 4, **kwargs) -> torch.nn.Module:
-    """Apply BitsAndBytes quantization"""
+    """Applies BitsAndBytes quantization to the model.
+
+    Args:
+        model (torch.nn.Module): The model to quantize.
+        quantization_bits (int, optional): The number of bits for quantization (4 or 8). Defaults to 4.
+        **kwargs: Additional keyword arguments for BitsAndBytesConfig.
+
+    Returns:
+        torch.nn.Module: The quantized model.
+
+    Raises:
+        ValueError: If `quantization_bits` is not 4 or 8.
+        Exception: If BitsAndBytes quantization fails.
+    """
     logger.info("Initializing BitsAndBytes Quantization")
     
     try:
@@ -312,7 +456,19 @@ def quantize_bitsandbytes(model: torch.nn.Module, quantization_bits: int = 4, **
         raise
 
 def quantize_spqr(model: torch.nn.Module, quantization_bits: int = 4, **kwargs) -> torch.nn.Module:
-    """Apply SpQR quantization"""
+    """Applies SpQR quantization to the model.
+
+    Args:
+        model (torch.nn.Module): The model to quantize.
+        quantization_bits (int, optional): The number of bits for quantization. Defaults to 4.
+        **kwargs: Additional keyword arguments for SpQRConfig.
+
+    Returns:
+        torch.nn.Module: The quantized model.
+
+    Raises:
+        Exception: If SpQR quantization fails.
+    """
     logger.info("Initializing SpQR Quantization")
     
     try:
@@ -348,7 +504,21 @@ def quantize_model_wbits(
     wbits: int,
     **method_kwargs
 ) -> torch.nn.Module:
-    """Main quantization dispatcher"""
+    """Dispatches to the appropriate quantization function based on the specified method.
+
+    Args:
+        model (torch.nn.Module): The model to quantize.
+        method (str): The quantization method to use (e.g., 'gptq', 'awq').
+        wbits (int): The number of bits for quantization.
+        **method_kwargs: Additional keyword arguments to pass to the specific quantization method.
+
+    Returns:
+        torch.nn.Module: The quantized model.
+
+    Raises:
+        ValueError: If an unsupported quantization method is provided.
+        Exception: If the chosen quantization method fails.
+    """
     if method not in QUANTIZATION_METHODS:
         available = ', '.join(QUANTIZATION_METHODS.keys())
         raise ValueError(f"Unsupported method '{method}'. Available: {available}")
@@ -363,7 +533,20 @@ def quantize_model_wbits(
         raise
 
 def quantize_kvcache(model: torch.nn.Module, method: str, bits: int, **kwargs) -> torch.nn.Module:
-    """Apply KV cache quantization"""
+    """Applies KV cache quantization to the model.
+
+    Args:
+        model (torch.nn.Module): The model to quantize.
+        method (str): The KV cache quantization method to use (e.g., 'hqq', 'quanto').
+        bits (int): The number of bits for quantization.
+        **kwargs: Additional keyword arguments for the specific quantization method.
+
+    Returns:
+        torch.nn.Module: The model with quantized KV cache.
+
+    Raises:
+        ValueError: If an unsupported KV cache quantization method is provided.
+    """
     logger.info(f"Applying KV cache quantization: {method} with {bits} bits")
     
     if method == 'hqq':
@@ -376,7 +559,17 @@ def quantize_kvcache(model: torch.nn.Module, method: str, bits: int, **kwargs) -
         raise ValueError(f"Unsupported KV cache quantization method: {method}")
 
 def save_quantized_model(model: torch.nn.Module, model_id: str, save_path: str, method: str) -> str:
-    """Save quantized model with consistent naming"""
+    """Saves the quantized model to a specified path with a consistent naming convention.
+
+    Args:
+        model (torch.nn.Module): The quantized model to save.
+        model_id (str): A unique identifier for the model.
+        save_path (str): The directory where the model will be saved.
+        method (str): The quantization method used.
+
+    Returns:
+        str: The full path to the saved model file.
+    """
     full_path = os.path.join(save_path, f"{model_id}_{method}.pt")
     os.makedirs(os.path.dirname(full_path), exist_ok=True)
     
@@ -402,7 +595,27 @@ def quantize(
     tokenizer: Optional[PreTrainedTokenizerFast] = None,
     **method_configs
 ) -> Optional[torch.nn.Module]:
-    """Main quantization function with unified interface"""
+    """Main function to quantize a model using a specified method and save it.
+
+    Args:
+        model (torch.nn.Module): The model to be quantized.
+        quantization_method (str): The name of the quantization method to use (e.g., 'gptq', 'awq').
+        quant_save_path (str): The base path where the quantized model will be saved.
+        model_id (str): An identifier for the model, used in saving.
+        quantization_wbits (Optional[int], optional): The number of bits for weight quantization. Defaults to 4 if not specified.
+        save_model_to_hf (bool, optional): If True, saves the quantized model to Hugging Face Hub. Defaults to False.
+        save_model_to_local (bool, optional): If True, saves the quantized model locally. Defaults to True.
+        save_model_hf_path (Optional[str], optional): Specific Hugging Face path if different from `quant_save_path`. Defaults to None.
+        save_model_local_path (Optional[str], optional): Specific local path if different from `quant_save_path`. Defaults to None.
+        tokenizer (Optional[PreTrainedTokenizerFast], optional): The tokenizer associated with the model, used for HF upload. Defaults to None.
+        **method_configs: Additional keyword arguments specific to the chosen quantization method.
+
+    Returns:
+        Optional[torch.nn.Module]: The quantized model if successful, otherwise None.
+
+    Raises:
+        ValueError: If `quantization_method` is not specified.
+    """
     if not quantization_method:
         raise ValueError("quantization_method must be specified")
     

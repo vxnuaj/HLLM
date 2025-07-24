@@ -2,12 +2,20 @@ import torch
 import os
 
 def verify_token_alignment(data_dir, num_samples=5):
-    """
-    Verify that for each sequence in X, the next token is correctly aligned in y.
-    
+    """Verifies that for each sequence in X, the next token is correctly aligned in y.
+
+    This function loads preprocessed data files (X and y tensors) from specified
+    directories and checks if the y tensor for a given sequence is a shifted
+    version of the X tensor, which is crucial for next-token prediction tasks.
+    It handles various naming conventions for y files and provides detailed
+    feedback on alignment issues, including the first mismatch and context.
+
     Args:
-        data_dir: Directory containing 'X' and 'y' subdirectories with .pt files
-        num_samples: Number of samples to check from each file
+        data_dir (str): Directory containing 'X' and 'y' subdirectories with .pt files.
+        num_samples (int, optional): Number of samples to check from each file. Defaults to 5.
+
+    Returns:
+        bool: True if all checked samples are perfectly aligned, False otherwise.
     """
     # Handle case where X and y are in separate subdirectories
     x_dir = os.path.join(data_dir, 'X')

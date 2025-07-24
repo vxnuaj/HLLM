@@ -1,3 +1,19 @@
+"""This script handles the preprocessing of TinyStories data, including downloading, tokenization,
+creating input-target sequences, and optionally uploading the processed data and tokenizer
+to the Hugging Face Hub.
+
+It performs the following main steps:
+1.  Downloads TinyStories datasets.
+2.  Processes raw text data.
+3.  Trains a new BPE tokenizer or loads an existing one.
+4.  Tokenizes the processed data.
+5.  Generates input (X) and target (y) sequences for training and validation,
+    saving them as PyTorch `.pt` files.
+6.  Optionally uploads the tokenizer and processed data to a Hugging Face dataset repository.
+
+Key parameters are defined at the top of the script, controlling aspects like
+vocabulary size, context length, number of processes, and output paths.
+"""
 import torch
 import os
 import tinytok.core as tt
@@ -123,7 +139,7 @@ if __name__ == "__main__":
 
         del X_train, y_train
 
-    # ---  validation --- 
+    # ---  validation ---
 
     data = tt.data_process(
         files=file_val,

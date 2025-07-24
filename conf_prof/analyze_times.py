@@ -24,6 +24,14 @@ def safe_load_json(file_path):
         return None
 
 def get_results(root_dir: str):
+    """Retrieves and safely loads all metrics.json files from subdirectories within a given root directory.
+
+    Args:
+        root_dir (str): The root directory containing subdirectories with 'metrics.json' files.
+
+    Returns:
+        list: A list of dictionaries, where each dictionary is the loaded content of a 'metrics.json' file.
+    """
     results = []
     
     list_files = sorted(os.listdir(root_dir), key=lambda x: (x.split('_')[0], int(x.split('_')[2])))
@@ -39,6 +47,17 @@ def get_results(root_dir: str):
     return results
 
 def get_best_configs(results, metric="avg_fwd_bwd_time", group_by="attn_type", top_n=None):
+    """Identifies and groups the best configurations based on a specified metric and grouping key.
+
+    Args:
+        results (list): A list of dictionaries, where each dictionary represents a configuration's results.
+        metric (str, optional): The metric to use for determining the best configurations. Defaults to "avg_fwd_bwd_time".
+        group_by (str, optional): The key to group configurations by (e.g., "attn_type"). Defaults to "attn_type".
+        top_n (int, optional): The number of top configurations to retrieve for each group. Defaults to None (all).
+
+    Returns:
+        dict: A dictionary where keys are group values and values are lists of the best configurations within that group.
+    """
     best_configs = {}
     group_values = set(cfg["config"].get(group_by, None) for cfg in results)
 
@@ -65,6 +84,16 @@ def get_best_configs(results, metric="avg_fwd_bwd_time", group_by="attn_type", t
     return best_configs
 
 def write_results(best_configs, root_dir='conf_prof/results', file_name='time_results.md', group_by = "attn_type", top_n = 2, metric = 'avg_fwd_bwd_time'):
+    """Writes the best configurations to a Markdown file.
+
+    Args:
+        best_configs (dict): A dictionary containing the best configurations, grouped by a specified key.
+        root_dir (str, optional): The root directory to save the results file. Defaults to 'conf_prof/results'.
+        file_name (str, optional): The name of the Markdown file. Defaults to 'time_results.md'.
+        group_by (str, optional): The key used for grouping configurations. Defaults to "attn_type".
+        top_n (int, optional): The number of top configurations displayed. Defaults to 2.
+        metric (str, optional): The metric used for determining the best configurations. Defaults to 'avg_fwd_bwd_time'.
+    """
     os.makedirs(root_dir, exist_ok=True)
     file_path = os.path.join(root_dir, file_name)
     
@@ -77,7 +106,7 @@ def write_results(best_configs, root_dir='conf_prof/results', file_name='time_re
                     f.write(f"Number of Groups: `{config[0]}`\n\n")
                     f.write(f"Avg. Forward Time: `{config[1]['avg_forward_time']}`\n\n")
                     f.write(f"Avg. Backward Time: `{config[1]['avg_backward_time']}`\n\n")
-                    f.write(f"Avg. Forward $\\rightarrow$ Backward Time: `{config[1]['avg_fwd_bwd_time']}`\n\n")
+                    f.write(f"Avg. Forward $\rightarrow$ Backward Time: `{config[1]['avg_fwd_bwd_time']}`\n\n")
                     config_str = json.dumps(config[1], indent=2)
                     f.write(f"```json\n{config_str}\n```\n\n")
                     f.write(f"---\n\n")
@@ -86,7 +115,7 @@ def write_results(best_configs, root_dir='conf_prof/results', file_name='time_re
                     f.write(f"Number of Groups: `{config['config']['n_groups']}`\n\n")
                 f.write(f"Avg. Forward Time: `{config['avg_forward_time']}`\n\n")
                 f.write(f"Avg. Backward Time: `{config['avg_backward_time']}`\n\n")
-                f.write(f"Avg. Forward $\\rightarrow$ Backward Time: `{config['avg_fwd_bwd_time']}`\n\n")
+                f.write(f"Avg. Forward $\rightarrow$ Backward Time: `{config['avg_fwd_bwd_time']}`\n\n")
                 config_str = json.dumps(config, indent=2)
                 f.write(f"```json\n{config_str}\n```\n\n")
                 f.write(f"---\n\n")

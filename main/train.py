@@ -1,3 +1,11 @@
+"""This script serves as the entry point for training the Large Language Model.
+
+It parses command-line arguments, loads various configuration settings (model, criterion,
+dataloader, optimizer, scheduler, Weights & Biases, and training parameters) from JSON files,
+and initializes and runs the `Trainer` class to commence the training process.
+
+Command-line arguments allow for enabling NCCL debugging and specifying logging behavior.
+"""
 import os
 import sys 
 import argparse

@@ -1,4 +1,8 @@
-from sweep_utils import run_profs
+'''
+the `run_profs` function from `sweep_utils.py` with predefined
+configuration parameters to measure and analyze the performance of different
+model configurations.
+'''
 
 run_profs(
     cfg_path="conf_prof/search_space.yaml",
